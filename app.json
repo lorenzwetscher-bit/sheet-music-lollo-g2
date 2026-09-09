@@ -1,8 +1,8 @@
 {
   "package_id": "com.vailble.sheetmusic",
-  "edition": "202601",
+  "edition": "202602",
   "name": "Sheet Music",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "min_sdk_version": "0.0.14",
   "entrypoint": "index.html",
   "permissions": [

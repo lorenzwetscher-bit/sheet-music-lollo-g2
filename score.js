@@ -323,13 +323,15 @@ export async function processDescriptor(
     let lum=.2126*im.data[i]+.7152*im.data[i+1]+.0722*im.data[i+2]
     lum=Math.max(0,Math.min(255,factor*(lum-128)+128))
     if(invert)lum=255-lum
-    const v=Math.round(lum)
+    // G2 display is 4-bit greyscale (16 green brightness levels). Quantize
+    // before transfer so the preview/processing matches the hardware model.
+    const v=Math.max(0,Math.min(255,Math.round(lum/17)*17))
     im.data[i]=im.data[i+1]=im.data[i+2]=v
     im.data[i+3]=255
   }
   ctx.putImageData(im,0,0)
 
-  const blob=await new Promise(r=>out.toBlob(r,'image/png'))
+  const blob=await new Promise((resolve,reject)=>out.toBlob(b=>b?resolve(b):reject(new Error('PNG-Vorschau konnte nicht erzeugt werden.')),'image/png'))
   return {canvas:out,url:URL.createObjectURL(blob)}
 }
 
@@ -337,6 +339,6 @@ export async function halfPngBytes(canvas,sx){
   const c=document.createElement('canvas')
   c.width=288;c.height=144
   c.getContext('2d').drawImage(canvas,sx,0,288,144,0,0,288,144)
-  const blob=await new Promise(r=>c.toBlob(r,'image/png'))
+  const blob=await new Promise((resolve,reject)=>c.toBlob(b=>b?resolve(b):reject(new Error('G2-Bild konnte nicht erzeugt werden.')),'image/png'))
   return new Uint8Array(await blob.arrayBuffer())
 }

@@ -34,7 +34,7 @@ document.querySelector('#app').innerHTML=`
     </div>
 
     <div class="settingrow" style="margin-top:8px">
-      <label class="toggle"><input id="invert" type="checkbox"> Invertieren</label>
+      <label class="toggle"><input id="invert" type="checkbox" checked> G2: helle Noten auf dunklem Hintergrund</label>
       <button id="save" disabled>💾 Speichern</button>
     </div>
     <div id="status">Noch keine Datei ausgewählt.</div>
@@ -303,7 +303,7 @@ async function openSaved(id){
   $('#scoreName').value=r.name
   $('#contrast').value=r.settings?.contrast??130
   $('#contrastValue').textContent=$('#contrast').value
-  $('#invert').checked=!!r.settings?.invert
+  $('#invert').checked=r.settings?.invert!==false
   rowsPerView=r.settings?.rowsPerView===2?2:1
   $('#rows1').classList.toggle('active',rowsPerView===1)
   $('#rows2').classList.toggle('active',rowsPerView===2)
