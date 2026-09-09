@@ -10,7 +10,7 @@ document.querySelector('#app').innerHTML=`
   <h1>Sheet Music for Even G2</h1>
   <p>Noten automatisch erkennen, 1–8 Zeilen als einen durchgehenden Ausschnitt auf der G2 anzeigen und schnell durch die Ansichten wechseln.</p>
   <div class="card">
-    <div class="grid2"><label class="filebtn">📷 Foto<input id="imgInput" type="file" accept="image/*" capture="environment"></label><label class="filebtn">📄 PDF<input id="pdfInput" type="file" accept="application/pdf"></label></div>
+    <div class="grid2"><label class="filebtn">📷 Foto<input id="imgInput" type="file" accept="image/*,.heic,.heif,.jfif,.webp,.gif,.bmp,.tif,.tiff,.avif" capture="environment"></label><label class="filebtn">📄 PDF<input id="pdfInput" type="file" accept="application/pdf"></label></div>
     <input id="scoreName" type="text" placeholder="Name der Noten">
     <button id="detect" class="primary" disabled>Notenzeilen erkennen</button>
     <div class="setting"><div class="settingrow"><span>Sichtbare Notenzeilen</span><strong id="rowsLabel">4</strong></div><div class="segmented eight"><button data-rows="1">1</button><button data-rows="2">2</button><button data-rows="3">3</button><button data-rows="4" class="active">4</button><button data-rows="5">5</button><button data-rows="6">6</button><button data-rows="7">7</button><button data-rows="8">8</button></div></div>
