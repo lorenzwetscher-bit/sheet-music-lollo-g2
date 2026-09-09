@@ -172,7 +172,7 @@ export function extractCutDescriptors(c,pageIndex=0){
 }
 
 export function buildViews(descriptors,linesPerView=1,totalPages=1){
-  const n=Math.max(1,Math.min(4,Number(linesPerView)||1)),views=[]
+  const n=Math.max(1,Math.min(8,Number(linesPerView)||1)),views=[]
   const byPage=new Map()
   for(const d of descriptors){
     const p=d.pageIndex||0

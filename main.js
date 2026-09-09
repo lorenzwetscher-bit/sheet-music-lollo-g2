@@ -8,12 +8,12 @@ const $=s=>document.querySelector(s)
 document.querySelector('#app').innerHTML=`
 <div class="wrap">
   <h1>Sheet Music for Even G2</h1>
-  <p>Noten automatisch erkennen, 1–4 Zeilen als einen durchgehenden Ausschnitt auf der G2 anzeigen und schnell durch die Ansichten wechseln.</p>
+  <p>Noten automatisch erkennen, 1–8 Zeilen als einen durchgehenden Ausschnitt auf der G2 anzeigen und schnell durch die Ansichten wechseln.</p>
   <div class="card">
     <div class="grid2"><label class="filebtn">📷 Foto<input id="imgInput" type="file" accept="image/*" capture="environment"></label><label class="filebtn">📄 PDF<input id="pdfInput" type="file" accept="application/pdf"></label></div>
     <input id="scoreName" type="text" placeholder="Name der Noten">
     <button id="detect" class="primary" disabled>Notenzeilen erkennen</button>
-    <div class="setting"><div class="settingrow"><span>Sichtbare Notenzeilen</span><strong id="rowsLabel">4</strong></div><div class="segmented four"><button data-rows="1">1</button><button data-rows="2">2</button><button data-rows="3">3</button><button data-rows="4" class="active">4</button></div></div>
+    <div class="setting"><div class="settingrow"><span>Sichtbare Notenzeilen</span><strong id="rowsLabel">4</strong></div><div class="segmented eight"><button data-rows="1">1</button><button data-rows="2">2</button><button data-rows="3">3</button><button data-rows="4" class="active">4</button><button data-rows="5">5</button><button data-rows="6">6</button><button data-rows="7">7</button><button data-rows="8">8</button></div></div>
     <div class="setting"><div class="settingrow"><span>Kontrast</span><strong id="contrastValue">150</strong></div><input id="contrast" type="range" min="60" max="220" value="150"></div>
     <div class="settingrow"><label class="toggle"><input id="cutout" type="checkbox" checked> Hintergrund ausblenden</label><label class="toggle"><input id="invert" type="checkbox"> Invertieren</label></div>
     <div class="row"><button id="save" disabled>💾 Speichern</button><button id="startG2" disabled>Auf G2 anzeigen</button></div>
@@ -98,12 +98,25 @@ async function processFile(f){$('#detect').disabled=true;$('#save').disabled=tru
 $('#detect').onclick=()=>file&&processFile(file)
 
 function makeId(){return globalThis.crypto?.randomUUID?.()||`score-${Date.now()}-${Math.random().toString(36).slice(2)}`}
-$('#save').onclick=async()=>{if(!file||!descriptors.length)return;$('#save').disabled=true;$('#status').textContent='Speichere…';try{const name=$('#scoreName').value.trim()||defaultName(file)||'Unbenannte Noten',id=currentId||makeId(),prev=currentId?await getScore(currentId):null;const storedFile=await fileToStored(file);await saveScore({id,name,fileName:file.name,type:file.type,storedFile,createdAt:prev?.createdAt||Date.now(),updatedAt:Date.now(),settings:{...settings(),linesPerView},adjustments});currentId=id;$('#status').textContent=`„${name}“ gespeichert.`;await refreshLibrary()}catch(e){console.error(e);$('#status').textContent='Speichern fehlgeschlagen: '+(e?.name==='QuotaExceededError'?'Speicherplatz der Even App ist voll. Bitte alte Noten löschen.':(e?.message||e))}finally{$('#save').disabled=false}}
+$('#save').onclick=async()=>{if(!file||!descriptors.length)return;$('#save').disabled=true;$('#status').textContent='Speichere…';try{const name=$('#scoreName').value.trim()||defaultName(file)||'Unbenannte Noten',id=currentId||makeId(),prev=currentId?await getScore(currentId):null;const storedFile=await fileToStored(file);await saveScore({id,name,fileName:file.name,type:file.type,storedFile,createdAt:prev?.createdAt||Date.now(),updatedAt:Date.now(),settings:{...settings(),linesPerView},adjustments});currentId=id;$('#status').textContent=`„${name}“ gespeichert.`;await refreshLibrary();await viewer?.refreshLibraryIfOpen()}catch(e){console.error(e);$('#status').textContent='Speichern fehlgeschlagen: '+(e?.name==='QuotaExceededError'?'Speicherplatz der Even App ist voll. Bitte alte Noten löschen.':(e?.message||e))}finally{$('#save').disabled=false}}
 
-async function openSaved(id){const r=await getScore(id);if(!r)return;$('#status').textContent='Öffne gespeicherte Noten…';currentId=r.id;file=r.storedFile?storedToFile(r.storedFile):r.blob;if(!file)throw new Error('Gespeicherte Datei fehlt.');$('#scoreName').value=r.name;$('#contrast').value=r.settings?.contrast??150;$('#contrastValue').textContent=$('#contrast').value;$('#invert').checked=!!r.settings?.invert;$('#cutout').checked=r.settings?.cutout!==false;linesPerView=Math.max(1,Math.min(4,r.settings?.linesPerView||r.settings?.rowsPerView||4));document.querySelectorAll('[data-rows]').forEach(x=>x.classList.toggle('active',+x.dataset.rows===linesPerView));$('#rowsLabel').textContent=linesPerView;pages=file.type==='application/pdf'?await pdfToCanvases(file):[await imageToCanvas(file)];totalPages=pages.length;descriptors=[];for(let i=0;i<pages.length;i++)descriptors.push(...extractCutDescriptors(pages[i],i));rebuildViews(true);adjustments=Array.isArray(r.adjustments)?r.adjustments.map(a=>({...defaultAdj(),...a})):[];ensureAdjustments();idx=0;$('#result').style.display='block';$('#save').disabled=false;$('#startG2').disabled=false;await renderCurrent({pushG2:false});$('#status').textContent=`„${r.name}“ geöffnet.`}
-async function removeSaved(id){await deleteScore(id);if(currentId===id)currentId=null;await refreshLibrary()}
+async function openSaved(id){const r=await getScore(id);if(!r)return;$('#status').textContent='Öffne gespeicherte Noten…';currentId=r.id;file=r.storedFile?storedToFile(r.storedFile):r.blob;if(!file)throw new Error('Gespeicherte Datei fehlt.');$('#scoreName').value=r.name;$('#contrast').value=r.settings?.contrast??150;$('#contrastValue').textContent=$('#contrast').value;$('#invert').checked=!!r.settings?.invert;$('#cutout').checked=r.settings?.cutout!==false;linesPerView=Math.max(1,Math.min(8,r.settings?.linesPerView||r.settings?.rowsPerView||4));document.querySelectorAll('[data-rows]').forEach(x=>x.classList.toggle('active',+x.dataset.rows===linesPerView));$('#rowsLabel').textContent=linesPerView;pages=file.type==='application/pdf'?await pdfToCanvases(file):[await imageToCanvas(file)];totalPages=pages.length;descriptors=[];for(let i=0;i<pages.length;i++)descriptors.push(...extractCutDescriptors(pages[i],i));rebuildViews(true);adjustments=Array.isArray(r.adjustments)?r.adjustments.map(a=>({...defaultAdj(),...a})):[];ensureAdjustments();idx=0;$('#result').style.display='block';$('#save').disabled=false;$('#startG2').disabled=false;await renderCurrent({pushG2:false});$('#status').textContent=`„${r.name}“ geöffnet.`}
+async function removeSaved(id){await deleteScore(id);if(currentId===id)currentId=null;await refreshLibrary();await viewer?.refreshLibraryIfOpen()}
 async function refreshLibrary(){const rows=await listScores();$('#libCount').textContent=rows.length;const el=$('#library');if(!rows.length){el.innerHTML='<p class="small">Noch nichts gespeichert.</p>';return}el.innerHTML='';for(const r of rows){const div=document.createElement('div');div.className='libraryItem';const d=new Date(r.updatedAt||r.createdAt);div.innerHTML=`<div><div class="libname">${escapeHtml(r.name)}</div><div class="libmeta">${escapeHtml(r.fileName||'')} · ${d.toLocaleDateString()}</div></div><button class="open">Öffnen</button><button class="danger delete">Löschen</button>`;div.querySelector('.open').onclick=()=>openSaved(r.id).catch(e=>$('#status').textContent='Öffnen fehlgeschlagen: '+(e?.message||e));div.querySelector('.delete').onclick=()=>removeSaved(r.id);el.appendChild(div)}}
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]))}
 
-$('#startG2').onclick=async()=>{if(!views.length)return;try{if(!viewer)viewer=new G2Viewer(()=>viewResults[idx]||cache.get(keyFor(idx)),()=>idx,v=>{idx=v;showMeta();renderCurrent({pushG2:false})},()=>views.length,msg=>$('#status').textContent=msg);await viewer.start();$('#status').textContent='G2 verbunden – Änderungen werden automatisch übertragen.'}catch(e){console.error(e);$('#status').textContent='G2-Verbindung fehlgeschlagen: '+(e?.message||e)}}
-refreshLibrary()
+function ensureViewer(){
+  if(viewer)return viewer
+  viewer=new G2Viewer({
+    getView:()=>viewResults[idx]||cache.get(keyFor(idx)),
+    getIndex:()=>idx,
+    setIndex:async v=>{idx=v;showMeta();await renderCurrent({pushG2:false})},
+    getViewCount:()=>views.length,
+    onStatus:msg=>$('#status').textContent=msg,
+    getLibrary:()=>listScores(),
+    onOpenSaved:async id=>{await openSaved(id);return viewResults[idx]||cache.get(keyFor(idx))}
+  })
+  return viewer
+}
+$('#startG2').onclick=async()=>{if(!views.length)return;try{await ensureViewer().start();$('#status').textContent='G2 verbunden – Wischen und Änderungen aktualisieren die Brille automatisch.'}catch(e){console.error(e);$('#status').textContent='G2-Verbindung fehlgeschlagen: '+(e?.message||e)}}
+refreshLibrary().then(()=>ensureViewer().boot()).catch(()=>{})
