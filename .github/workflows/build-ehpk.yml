@@ -1,0 +1,36 @@
+name: Build Even Hub EHPK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build app
+        run: npm run build
+
+      - name: Pack EHPK
+        run: npm run pack
+
+      - name: Upload EHPK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sheet-music-g2-ehpk
+          path: sheet-music-g2.ehpk
+          if-no-files-found: error
