@@ -1,0 +1,22 @@
+{
+  "name": "even-g2-sheet-music",
+  "private": true,
+  "version": "0.8.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5173",
+    "build": "vite build",
+    "pack": "evenhub pack app.json dist -o sheet-music-g2.ehpk --sdk-ver 0.0.14"
+  },
+  "dependencies": {
+    "@evenrealities/even_hub_sdk": "0.0.14",
+    "pdfjs-dist": "^5.4.149",
+    "vite": "^7.1.3"
+  },
+  "devDependencies": {
+    "@evenrealities/evenhub-cli": "0.1.14"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
