@@ -1,6 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist'
 import PdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker&inline'
-import heic2any from 'heic2any'
+import { heicTo } from 'heic-to/csp'
 import * as UTIF from 'utif'
 
 // Keep the PDF worker inside the Even Hub bundle. The Even App WebView serves
@@ -86,8 +86,8 @@ async function decodeBlobWithImg(blob){
 }
 
 async function heicToDecodableBlob(file){
-  const out=await heic2any({blob:file,toType:'image/jpeg',quality:0.96})
-  return Array.isArray(out)?out[0]:out
+  const out=await heicTo({blob:file,type:'image/jpeg',quality:0.96})
+  return out
 }
 
 async function tiffToCanvas(buffer){
