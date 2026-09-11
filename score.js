@@ -259,3 +259,23 @@ export async function quadrantPngBytes(canvas,sx,sy){
   const blob=await new Promise((resolve,reject)=>c.toBlob(b=>b?resolve(b):reject(new Error('G2-Bild konnte nicht erzeugt werden.')),'image/png'))
   return new Uint8Array(await blob.arrayBuffer())
 }
+
+
+export async function processScrollFrame(spec,{contrast=130,invert=false,cutout=true}={},makePreview=false){
+  const source=spec?.source
+  if(!source)throw new Error('Keine Quelle für Auto-Scroll vorhanden.')
+  const left=Math.max(0,Math.min(source.width-1,Math.round(spec.left||0)))
+  const right=Math.max(left,Math.min(source.width-1,Math.round(spec.right??source.width-1)))
+  const top=Math.max(0,Math.min(source.height-1,Math.round(spec.top||0)))
+  const height=Math.max(1,Math.min(source.height-top,Math.round(spec.height||source.height)))
+  const width=Math.max(1,right-left+1)
+  const out=document.createElement('canvas');out.width=576;out.height=288
+  const ctx=out.getContext('2d',{alpha:false,willReadFrequently:true})
+  ctx.fillStyle=invert?'#fff':'#000';ctx.fillRect(0,0,576,288)
+  ctx.drawImage(source,left,top,width,height,0,0,576,288)
+  applyInkMode(out,{contrast,invert,cutout})
+  let url=null
+  if(makePreview){const blob=await new Promise((resolve,reject)=>out.toBlob(b=>b?resolve(b):reject(new Error('Auto-Scroll-Vorschau konnte nicht erzeugt werden.')),'image/png'));url=URL.createObjectURL(blob)}
+  const g2Parts=await Promise.all([[0,0],[288,0],[0,144],[288,144]].map(([sx,sy])=>quadrantPngBytes(out,sx,sy)))
+  return {canvas:out,url,g2Parts,scroll:true,pageIndex:spec.pageIndex}
+}
