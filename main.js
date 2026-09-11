@@ -45,6 +45,7 @@ document.querySelector('#app').innerHTML=`
 let file=null,pages=[],descriptors=[],views=[],viewResults=[],adjustments=[],idx=0,linesPerView=4,viewer=null,currentId=null
 let renderTimer=null,renderToken=0,totalPages=1
 const cache=new Map()
+let prefetchQueue=[],prefetchBusy=false,prefetchGeneration=0
 
 const defaultAdj=()=>({cropX:0,cropY:0,cropHeight:100,cropWidth:100})
 const defaultName=f=>(f?.name||'').replace(/\.[^.]+$/,'')
@@ -80,7 +81,7 @@ function settings(){return {contrast:+$('#contrast').value,invert:$('#invert').c
 function keyFor(i){const a=adjustments[i]||defaultAdj(),s=settings();return `${i}|${linesPerView}|${s.contrast}|${s.invert}|${s.cutout}|${a.cropX}|${a.cropY}|${a.cropHeight}|${a.cropWidth}`}
 function ensureAdjustments(){while(adjustments.length<views.length)adjustments.push(defaultAdj());if(adjustments.length>views.length)adjustments.length=views.length}
 function revokeResult(r){if(r?.url)URL.revokeObjectURL(r.url)}
-function clearCache(){for(const r of cache.values())revokeResult(r);cache.clear();viewResults=[]}
+function clearCache(){prefetchGeneration++;prefetchQueue=[];for(const r of cache.values())revokeResult(r);cache.clear();viewResults=[]}
 
 function rebuildViews(resetAdj=false){const old=adjustments;views=buildViews(descriptors,linesPerView,totalPages);adjustments=resetAdj?[]:old;ensureAdjustments();idx=Math.min(idx,Math.max(0,views.length-1));clearCache();showMeta()}
 
@@ -93,24 +94,53 @@ document.querySelectorAll('[data-rows]').forEach(b=>b.onclick=()=>{
   showMeta();scheduleRender(true)
 })
 
-async function renderView(i,{force=false}={}){
+async function ensurePreviewUrl(r){
+  if(!r?.canvas)return null
+  if(r.url)return r.url
+  const blob=await new Promise((resolve,reject)=>r.canvas.toBlob(b=>b?resolve(b):reject(new Error('Vorschau konnte nicht erzeugt werden.')),'image/png'))
+  r.url=URL.createObjectURL(blob);return r.url
+}
+
+async function renderView(i,{force=false,preview=true}={}){
   if(!views[i])return null
   const k=keyFor(i)
-  if(!force&&cache.has(k))return cache.get(k)
-  const r=await processView(views[i],{...settings(),...(adjustments[i]||defaultAdj())})
+  if(!force&&cache.has(k)){const hit=cache.get(k);if(preview&&!hit.url)await ensurePreviewUrl(hit);viewResults[i]=hit;return hit}
+  const r=await processView(views[i],{...settings(),...(adjustments[i]||defaultAdj())},preview)
   cache.set(k,r);viewResults[i]=r
   return r
+}
+
+function queuePrefetch(center=idx){
+  const gen=++prefetchGeneration
+  const order=[]
+  // Nearest pages first: these are the ones a musician is most likely to request next.
+  for(let d=1;d<=4;d++){if(center+d<views.length)order.push(center+d);if(center-d>=0)order.push(center-d)}
+  // Then prepare the rest in the background so a longer performance stays instant.
+  for(let i=0;i<views.length;i++)if(i!==center&&!order.includes(i))order.push(i)
+  prefetchQueue=order.map(i=>({i,gen}))
+  runPrefetchQueue().catch(()=>{})
+}
+
+async function runPrefetchQueue(){
+  if(prefetchBusy)return;prefetchBusy=true
+  try{
+    while(prefetchQueue.length){
+      const job=prefetchQueue.shift();if(!job||job.gen!==prefetchGeneration)continue
+      try{await renderView(job.i,{preview:false})}catch(e){console.warn('Prefetch fehlgeschlagen',job.i,e)}
+      // Yield so UI/input is never blocked by background preparation.
+      await new Promise(r=>setTimeout(r,0))
+    }
+  }finally{prefetchBusy=false}
 }
 
 async function renderCurrent({pushG2=true}={}){
   if(!views.length)return
   const token=++renderToken
   $('#status').textContent='Bereite Ansicht vor…'
-  const r=await renderView(idx)
+  const r=await renderView(idx,{preview:true})
   if(token!==renderToken)return
   $('#preview').src=r.url;showMeta();$('#status').textContent='Ansicht bereit.'
-  // Prefetch neighbors without blocking UI.
-  setTimeout(()=>{if(views[idx+1])renderView(idx+1).catch(()=>{});if(views[idx-1])renderView(idx-1).catch(()=>{})},0)
+  setTimeout(()=>queuePrefetch(idx),0)
   if(pushG2&&viewer){try{await viewer.requestRender()}catch(e){$('#status').textContent='G2-Verbindung fehlgeschlagen: '+(e?.message||e)}}
 }
 function scheduleRender(pushG2=true){clearTimeout(renderTimer);$('#contrastValue').textContent=$('#contrast').value;renderTimer=setTimeout(()=>renderCurrent({pushG2}),80)}
@@ -172,11 +202,18 @@ function ensureViewer(){
   viewer=new G2Viewer({
     getView:()=>viewResults[idx]||cache.get(keyFor(idx)),
     getIndex:()=>idx,
-    setIndex:async v=>{idx=v;showMeta();await renderCurrent({pushG2:false})},
+    setIndex:async v=>{
+      idx=v;showMeta()
+      // G2 page turns get priority: prepare raw G2 pixels first and update the
+      // phone preview afterwards so preview PNG creation cannot slow the glasses.
+      await renderView(idx,{preview:false})
+      setTimeout(async()=>{try{const r=await renderView(idx,{preview:true});if(r?.url)$('#preview').src=r.url}catch{}},0)
+    },
     getViewCount:()=>views.length,
     onStatus:msg=>$('#status').textContent=msg,
     getLibrary:async()=>({scores:await listScores(),folders:await listFolders()}),
-    onOpenSaved:async id=>{await openSaved(id);return viewResults[idx]||cache.get(keyFor(idx))}
+    onOpenSaved:async id=>{await openSaved(id);return viewResults[idx]||cache.get(keyFor(idx))},
+    onPrefetch:center=>queuePrefetch(center)
   })
   return viewer
 }

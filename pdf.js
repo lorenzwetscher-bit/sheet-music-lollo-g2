@@ -1,11 +1,15 @@
 import * as pdfjsLib from 'pdfjs-dist'
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import PdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker&inline'
 import { heicTo } from 'heic-to/csp'
 import * as UTIF from 'utif'
 
-// Vite/PDF.js: use a real emitted worker asset instead of an inline Worker.
-// This works both on localhost and in the packaged Even app.
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
+// Keep the PDF worker inside the app bundle. The Even App serves the app from a
+// local 127.0.0.1 origin where a separately emitted worker module may not be fetchable.
+try {
+  pdfjsLib.GlobalWorkerOptions.workerPort = new PdfWorker()
+} catch (err) {
+  console.warn('PDF worker initialization failed', err)
+}
 
 export async function isPdfFile(file){
   if(!file)return false

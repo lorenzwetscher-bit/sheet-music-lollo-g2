@@ -1,12 +1,11 @@
 import { waitForEvenAppBridge, OsEventTypeList } from '@evenrealities/even_hub_sdk'
-import { quadrantPngBytes } from './score.js'
+import { quadrantGray4Bytes, canvasGray4Bytes } from './score.js'
 import logoUrl from './wetscher-logo-g2.png?url'
 
 const pageOk=r=>r===0||r===true||r==='success'
 const imageOk=r=>r===0||r===true||r==='success'
 
 // CLICK_EVENT is numeric 0 and can therefore be omitted by protobuf.
-// Accept the event layouts seen in the Even App and simulator.
 function eventType(ev){
   if(ev==null)return null
   if(typeof ev.eventType==='number')return ev.eventType
@@ -17,20 +16,20 @@ function eventType(ev){
   return null
 }
 
-function fitText(ctx,text,maxWidth){
-  let s=String(text||'').replace(/\s+/g,' ').trim()
-  if(ctx.measureText(s).width<=maxWidth)return s
-  while(s.length>3&&ctx.measureText(s+'…').width>maxWidth)s=s.slice(0,-1)
-  return s+'…'
+function shortName(s,max=52){
+  s=String(s||'').replace(/\s+/g,' ').trim()
+  return s.length>max?s.slice(0,max-1)+'…':s
 }
 
 export class G2Viewer{
-  constructor({getView,getIndex,setIndex,getViewCount,onStatus,getLibrary,onOpenSaved}){
+  constructor({getView,getIndex,setIndex,getViewCount,onStatus,getLibrary,onOpenSaved,onPrefetch}){
     this.getView=getView;this.getIndex=getIndex;this.setIndex=setIndex;this.getViewCount=getViewCount
     this.onStatus=onStatus||(()=>{});this.getLibrary=getLibrary||(()=>Promise.resolve({scores:[],folders:[]}));this.onOpenSaved=onOpenSaved||(()=>Promise.resolve())
-    this.bridge=null;this.unsub=null;this.launchUnsub=null;this.started=false;this.mode='none'
+    this.onPrefetch=onPrefetch||(()=>{})
+    this.bridge=null;this.unsub=null;this.launchUnsub=null;this.started=false;this.mode='none';this.pageKind='none'
     this.busy=false;this.pending=false;this.libraryScores=[];this.libraryFolders=[];this.libraryItems=[];this.librarySelected=0;this.libraryFolderId=null
-    this.startupReady=Promise.resolve();this.navigating=false;this.lastEventAt=0;this.logoPromise=null;this.imagePageReady=false
+    this.libraryPage=-1;this.libraryPageSize=4;this.startupReady=Promise.resolve();this.navigating=false;this.lastEventAt=0
+    this.logoPromise=null;this.logoBytesPromise=null
   }
 
   async ensureBridge(force=false){if(force)this.bridge=null;if(!this.bridge)this.bridge=await waitForEvenAppBridge();return this.bridge}
@@ -41,12 +40,24 @@ export class G2Viewer{
     return this.logoPromise
   }
 
+  async logoBytes(){
+    if(this.logoBytesPromise)return this.logoBytesPromise
+    this.logoBytesPromise=(async()=>{
+      const img=await this.loadLogo(),c=document.createElement('canvas');c.width=190;c.height=58
+      const ctx=c.getContext('2d',{alpha:false,willReadFrequently:true});ctx.fillStyle='#000';ctx.fillRect(0,0,c.width,c.height)
+      const scale=Math.min(c.width/img.naturalWidth,c.height/img.naturalHeight),w=Math.max(1,Math.round(img.naturalWidth*scale)),h=Math.max(1,Math.round(img.naturalHeight*scale))
+      ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';ctx.drawImage(img,Math.round((c.width-w)/2),Math.round((c.height-h)/2),w,h)
+      return canvasGray4Bytes(c)
+    })()
+    return this.logoBytesPromise
+  }
+
   async showStartupNotice(){
     const b=await this.ensureBridge()
     const payload={containerTotalNum:1,textObject:[{xPosition:0,yPosition:0,width:576,height:288,borderWidth:0,borderColor:0,paddingLength:18,containerID:30,containerName:'startup',content:'SHEET MUSIC\n\nStarted successfully.\nLoading your library...',isEventCapture:1,zOrderIndex:1}]}
     const res=this.started?await b.rebuildPageContainer(payload):await b.createStartUpPageContainer(payload)
     if(!pageOk(res))throw new Error('Startanzeige konnte nicht erstellt werden: '+res)
-    this.started=true;this.mode='startup';this.onStatus('Sheet Music gestartet…');await new Promise(resolve=>setTimeout(resolve,900))
+    this.started=true;this.pageKind='startup';this.mode='startup';this.onStatus('Sheet Music gestartet…');await new Promise(resolve=>setTimeout(resolve,650))
   }
 
   async boot(){
@@ -56,19 +67,14 @@ export class G2Viewer{
     await this.startupReady;await this.showLibrary(true)
   }
 
-  pagePayload(){return {containerTotalNum:5,textObject:[{xPosition:0,yPosition:0,width:576,height:288,borderWidth:0,borderColor:0,paddingLength:0,containerID:1,containerName:'events',content:' ',isEventCapture:1,zOrderIndex:1}],imageObject:[{xPosition:0,yPosition:0,width:288,height:144,containerID:2,containerName:'q1',zOrderIndex:2},{xPosition:288,yPosition:0,width:288,height:144,containerID:3,containerName:'q2',zOrderIndex:3},{xPosition:0,yPosition:144,width:288,height:144,containerID:4,containerName:'q3',zOrderIndex:4},{xPosition:288,yPosition:144,width:288,height:144,containerID:5,containerName:'q4',zOrderIndex:5}]}}
+  scorePayload(){return {containerTotalNum:5,textObject:[{xPosition:0,yPosition:0,width:576,height:288,borderWidth:0,borderColor:0,paddingLength:0,containerID:1,containerName:'events',content:' ',isEventCapture:1,zOrderIndex:1}],imageObject:[{xPosition:0,yPosition:0,width:288,height:144,containerID:2,containerName:'q1',zOrderIndex:2},{xPosition:288,yPosition:0,width:288,height:144,containerID:3,containerName:'q2',zOrderIndex:3},{xPosition:0,yPosition:144,width:288,height:144,containerID:4,containerName:'q3',zOrderIndex:4},{xPosition:288,yPosition:144,width:288,height:144,containerID:5,containerName:'q4',zOrderIndex:5}]}}
 
-  async createImagePage(mode,rebuild=true){
-    // Library and score use the exact same 4-image page layout. Rebuilding the
-    // page container on every swipe/click is expensive on real G2 hardware, so
-    // only build it once after the startup screen (or after a reconnect).
-    if(this.imagePageReady){this.mode=mode;return}
-    const b=await this.ensureBridge(),payload=this.pagePayload();
-    const res=this.started?await b.rebuildPageContainer(payload):await b.createStartUpPageContainer(payload)
-    if(!pageOk(res))throw new Error((mode==='library'?'Bibliothek':'Notenansicht')+' konnte nicht erstellt werden: '+res)
-    this.started=true;this.imagePageReady=true;this.mode=mode
+  async createScorePage(){
+    if(this.pageKind==='score'){this.mode='score';return}
+    const b=await this.ensureBridge(),res=this.started?await b.rebuildPageContainer(this.scorePayload()):await b.createStartUpPageContainer(this.scorePayload())
+    if(!pageOk(res))throw new Error('Notenansicht konnte nicht erstellt werden: '+res)
+    this.started=true;this.pageKind='score';this.mode='score'
   }
-  async createScorePage(rebuild=false){await this.createImagePage('score',rebuild)}
 
   rebuildLibraryItems(){
     const folders=[...this.libraryFolders].sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'de'))
@@ -77,87 +83,90 @@ export class G2Viewer{
       if(!folder){this.libraryFolderId=null;return this.rebuildLibraryItems()}
       this.libraryItems=[{kind:'back',id:'__back__',name:'← Zurück'},...this.libraryScores.filter(s=>s.folderId===folder.id).map(s=>({kind:'score',id:s.id,name:s.name||s.fileName||'Unbenannte Noten'}))]
     }else{
-      const folderIds=new Set(folders.map(f=>f.id))
-      const rootScores=this.libraryScores.filter(s=>!s.folderId||!folderIds.has(s.folderId))
+      const folderIds=new Set(folders.map(f=>f.id)),rootScores=this.libraryScores.filter(s=>!s.folderId||!folderIds.has(s.folderId))
       this.libraryItems=[...folders.map(f=>({kind:'folder',id:f.id,name:f.name||'Ordner'})),...rootScores.map(s=>({kind:'score',id:s.id,name:s.name||s.fileName||'Unbenannte Noten'}))]
     }
     this.librarySelected=Math.max(0,Math.min(this.librarySelected,Math.max(0,this.libraryItems.length-1)))
   }
 
   async reloadLibrary(){
-    const selected=this.libraryItems[this.librarySelected]
-    const snap=await this.getLibrary()
-    this.libraryScores=Array.isArray(snap)?snap:(Array.isArray(snap?.scores)?snap.scores:[])
-    this.libraryFolders=Array.isArray(snap?.folders)?snap.folders:[]
+    const selected=this.libraryItems[this.librarySelected],snap=await this.getLibrary()
+    this.libraryScores=Array.isArray(snap)?snap:(Array.isArray(snap?.scores)?snap.scores:[]);this.libraryFolders=Array.isArray(snap?.folders)?snap.folders:[]
     this.rebuildLibraryItems()
     if(selected){const i=this.libraryItems.findIndex(x=>x.kind===selected.kind&&x.id===selected.id);if(i>=0)this.librarySelected=i}
   }
 
-  async libraryCanvas(){
-    const c=document.createElement('canvas');c.width=576;c.height=288
-    const ctx=c.getContext('2d',{alpha:false});ctx.fillStyle='#000';ctx.fillRect(0,0,576,288);ctx.fillStyle='#fff';ctx.strokeStyle='#fff';ctx.textBaseline='middle'
-
-    try{
-      const logo=await this.loadLogo()
-      // Asset is tightly cropped and pre-rendered from the high-resolution logo.
-      // Draw it at native-friendly size for a sharper G2 result.
-      const h=58,w=Math.round(h*(logo.naturalWidth/logo.naturalHeight))
-      ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';ctx.drawImage(logo,Math.round((576-w)/2),3,w,h)
-    }catch(e){console.warn(e)}
-
-    ctx.textAlign='center';ctx.font='bold 22px sans-serif';ctx.fillText('SHEET MUSIC',288,78)
-    if(this.libraryFolderId){const folder=this.libraryFolders.find(f=>f.id===this.libraryFolderId);ctx.font='12px sans-serif';ctx.fillText(fitText(ctx,folder?.name||'Ordner',420),288,98)}
-
-    if(!this.libraryItems.length){
-      ctx.font='bold 18px sans-serif';ctx.fillText('Keine Noten vorhanden',288,155);ctx.font='15px sans-serif';ctx.fillText('Speichere Noten in der Handy-App ab.',288,187);this.drawPageDots(ctx,1,0);return c
-    }
-
-    const pageSize=4,totalPages=Math.max(1,Math.ceil(this.libraryItems.length/pageSize)),page=Math.floor(this.librarySelected/pageSize),start=page*pageSize
-    const visible=this.libraryItems.slice(start,start+pageSize),selectedRow=this.librarySelected-start
-    const x=32,w=512,rowH=28,y0=108,gap=32
-    ctx.textAlign='left';ctx.font='17px sans-serif';ctx.lineWidth=2
-    visible.forEach((item,j)=>{
-      const y=y0+j*gap
-      if(j===selectedRow){ctx.beginPath();ctx.roundRect(x,y,w,rowH,9);ctx.stroke()}
-      let prefix=item.kind==='folder'?'> ':''
-      ctx.font=j===selectedRow?'bold 17px sans-serif':'17px sans-serif'
-      ctx.fillText(fitText(ctx,prefix+item.name,w-28),x+14,y+rowH/2+1)
-    })
-    this.drawPageDots(ctx,totalPages,page)
-    return c
+  libraryListContent(page=this.currentLibraryPage()){
+    if(!this.libraryItems.length)return 'Keine Noten vorhanden\n\nSpeichere Noten in der Handy-App ab.'
+    const start=page*this.libraryPageSize,visible=this.libraryItems.slice(start,start+this.libraryPageSize)
+    return visible.map((item,j)=>{
+      const global=start+j,sel=global===this.librarySelected?'> ':'  ',folder=item.kind==='folder'?'[Ordner] ':''
+      return sel+shortName(folder+item.name)
+    }).join('\n\n')
   }
 
-  drawPageDots(ctx,totalPages,currentPage){
-    const y=274,count=Math.max(1,totalPages),maxSpan=450,spacing=count<=1?0:Math.min(18,maxSpan/(count-1)),start=288-(spacing*(count-1))/2
-    ctx.lineWidth=1.5
-    for(let i=0;i<count;i++){const x=start+i*spacing;ctx.beginPath();ctx.arc(x,y,i===currentPage?4.5:2.8,0,Math.PI*2);if(i===currentPage)ctx.fill();else ctx.stroke()}
+  currentLibraryPage(){return this.libraryItems.length?Math.floor(this.librarySelected/this.libraryPageSize):0}
+  libraryDots(){
+    const pages=Math.max(1,Math.ceil(this.libraryItems.length/this.libraryPageSize)),cur=this.currentLibraryPage()
+    if(pages>12)return `${cur+1} / ${pages}`
+    return Array.from({length:pages},(_,i)=>i===cur?'●':'○').join('  ')
   }
 
-  async renderLibrary(){await this.createImagePage('library',false);const canvas=await this.libraryCanvas();await this.sendCanvas(canvas);this.onStatus(this.libraryItems.length?'G2-Bibliothek bereit: Swipe zur Auswahl, Klick zum Öffnen.':'G2-Bibliothek bereit – noch keine Noten gespeichert.')}
-  async showLibrary(reload=true){await this.ensureBridge();this.bindEvents();if(reload)await this.reloadLibrary();else this.rebuildLibraryItems();await this.renderLibrary()}
+  libraryPayload(){
+    const folder=this.libraryFolderId?this.libraryFolders.find(f=>f.id===this.libraryFolderId):null
+    const texts=[
+      {xPosition:0,yPosition:0,width:576,height:288,borderWidth:0,borderColor:0,paddingLength:0,containerID:10,containerName:'libevents',content:' ',isEventCapture:1,zOrderIndex:1},
+      {xPosition:210,yPosition:68,width:220,height:30,borderWidth:0,borderColor:0,paddingLength:0,containerID:11,containerName:'libtitle',content:'SHEET MUSIC',isEventCapture:0,zOrderIndex:3},
+      {xPosition:72,yPosition:92,width:432,height:22,borderWidth:0,borderColor:0,paddingLength:0,containerID:12,containerName:'libfolder',content:folder?shortName(folder.name,42):' ',isEventCapture:0,zOrderIndex:4},
+      {xPosition:42,yPosition:112,width:500,height:132,borderWidth:0,borderColor:0,paddingLength:0,containerID:13,containerName:'libitems',content:this.libraryListContent(),isEventCapture:0,zOrderIndex:5},
+      {xPosition:180,yPosition:258,width:260,height:28,borderWidth:0,borderColor:0,paddingLength:0,containerID:14,containerName:'libdots',content:this.libraryDots(),isEventCapture:0,zOrderIndex:6},
+    ]
+    return {containerTotalNum:6,textObject:texts,imageObject:[{xPosition:193,yPosition:4,width:190,height:58,containerID:15,containerName:'liblogo',zOrderIndex:2}]}
+  }
+
+  async rebuildLibraryPage(){
+    const b=await this.ensureBridge(),payload=this.libraryPayload(),res=this.started?await b.rebuildPageContainer(payload):await b.createStartUpPageContainer(payload)
+    if(!pageOk(res))throw new Error('Bibliothek konnte nicht erstellt werden: '+res)
+    this.started=true;this.pageKind='library';this.mode='library';this.libraryPage=this.currentLibraryPage()
+    const result=await b.updateImageRawData({containerID:15,containerName:'liblogo',imageData:await this.logoBytes()})
+    if(!imageOk(result))console.warn('Logo update:',result)
+  }
+
+  async updateLibrarySelectionOnly(){
+    const b=await this.ensureBridge(),ok=await b.textContainerUpgrade({containerID:13,containerName:'libitems',content:this.libraryListContent(),contentOffset:0,contentLength:0})
+    if(!pageOk(ok))throw new Error('Auswahl konnte nicht aktualisiert werden.')
+  }
+
+  async showLibrary(reload=true){
+    await this.ensureBridge();this.bindEvents();if(reload)await this.reloadLibrary();else this.rebuildLibraryItems();await this.rebuildLibraryPage()
+    this.onStatus(this.libraryItems.length?'G2-Bibliothek bereit: Swipe zur Auswahl, Klick zum Öffnen.':'G2-Bibliothek bereit – noch keine Noten gespeichert.')
+  }
 
   async openSelectedLibraryItem(){
     const item=this.libraryItems[this.librarySelected];if(!item)return
-    if(item.kind==='back'){this.libraryFolderId=null;this.librarySelected=0;this.rebuildLibraryItems();await this.renderLibrary();return}
-    if(item.kind==='folder'){this.libraryFolderId=item.id;this.librarySelected=0;this.rebuildLibraryItems();await this.renderLibrary();return}
-    if(item.kind==='score'&&item.id){this.onStatus('Öffne Noten auf der G2…');await this.onOpenSaved(item.id);await this.createScorePage(false);await this.requestRender(true)}
+    if(item.kind==='back'){this.libraryFolderId=null;this.librarySelected=0;this.rebuildLibraryItems();await this.rebuildLibraryPage();return}
+    if(item.kind==='folder'){this.libraryFolderId=item.id;this.librarySelected=0;this.rebuildLibraryItems();await this.rebuildLibraryPage();return}
+    if(item.kind==='score'&&item.id){
+      this.onStatus('Öffne Noten auf der G2…');await this.onOpenSaved(item.id);await this.createScorePage();await this.requestRender(true);this.onPrefetch(this.getIndex())
+    }
   }
 
   async moveLibrarySelection(delta){
     if(!this.libraryItems.length)return
-    const next=Math.max(0,Math.min(this.libraryItems.length-1,this.librarySelected+delta))
-    if(next===this.librarySelected)return
-    this.librarySelected=next;await this.renderLibrary()
+    const next=Math.max(0,Math.min(this.libraryItems.length-1,this.librarySelected+delta));if(next===this.librarySelected)return
+    const oldPage=this.currentLibraryPage();this.librarySelected=next;const newPage=this.currentLibraryPage()
+    if(newPage===oldPage&&this.pageKind==='library')await this.updateLibrarySelectionOnly()
+    else await this.rebuildLibraryPage()
   }
 
   bindEvents(){
     if(this.unsub||!this.bridge)return
     this.unsub=this.bridge.onEvenHubEvent(async ev=>{
-      const now=Date.now();if(now-this.lastEventAt<110)return;this.lastEventAt=now
+      const now=Date.now();if(now-this.lastEventAt<85)return;this.lastEventAt=now
       if(this.navigating)return;this.navigating=true
       try{
         const type=eventType(ev)
-        if(type===OsEventTypeList.DOUBLE_CLICK_EVENT){try{await this.bridge.shutDownPageContainer(1)}catch{}this.started=false;this.mode='none';return}
+        if(type===OsEventTypeList.DOUBLE_CLICK_EVENT){try{await this.bridge.shutDownPageContainer(1)}catch{}this.started=false;this.pageKind='none';this.mode='none';return}
         if(this.mode==='library'){
           if(type===OsEventTypeList.SCROLL_BOTTOM_EVENT)await this.moveLibrarySelection(1)
           else if(type===OsEventTypeList.SCROLL_TOP_EVENT)await this.moveLibrarySelection(-1)
@@ -166,21 +175,30 @@ export class G2Viewer{
         }
         if(this.mode==='score'){
           const idx=this.getIndex(),count=this.getViewCount()
-          if(type===OsEventTypeList.SCROLL_BOTTOM_EVENT&&idx<count-1){await this.setIndex(idx+1);await this.requestRender(true)}
-          else if(type===OsEventTypeList.SCROLL_TOP_EVENT&&idx>0){await this.setIndex(idx-1);await this.requestRender(true)}
+          if(type===OsEventTypeList.SCROLL_BOTTOM_EVENT&&idx<count-1){await this.setIndex(idx+1);await this.requestRender(true);this.onPrefetch(idx+1)}
+          else if(type===OsEventTypeList.SCROLL_TOP_EVENT&&idx>0){await this.setIndex(idx-1);await this.requestRender(true);this.onPrefetch(idx-1)}
           else if(type===OsEventTypeList.CLICK_EVENT){await this.showLibrary(true)}
         }
       }catch(err){console.error(err);this.onStatus('G2-Steuerung fehlgeschlagen: '+(err?.message||err))}finally{this.navigating=false}
     })
   }
 
-  async start(){this.onStatus('Verbinde mit Even G2…');await this.ensureBridge();this.bindEvents();await this.createScorePage(this.started);await this.requestRender(true)}
+  async start(){this.onStatus('Verbinde mit Even G2…');await this.ensureBridge();this.bindEvents();await this.createScorePage();await this.requestRender(true);this.onPrefetch(this.getIndex())}
   async refreshLibraryIfOpen(){if(this.mode==='library')await this.showLibrary(true)}
   async requestRender(immediate=false){this.pending=true;if(this.busy&&!immediate)return;await this.flush()}
 
   async flush(){
     if(this.busy)return;this.busy=true
-    try{while(this.pending){this.pending=false;const view=this.getView();if(!view?.canvas)continue;try{await this.sendView(view)}catch(err){console.warn('G2 update failed, reconnecting once',err);this.onStatus('G2 kurz getrennt – verbinde neu…');try{this.unsub?.()}catch{};this.unsub=null;this.started=false;this.imagePageReady=false;await this.ensureBridge(true);this.bindEvents();await this.createScorePage(false);await this.sendView(view)}}if(this.mode==='score')this.onStatus('G2 automatisch aktualisiert.')}finally{this.busy=false}
+    try{
+      while(this.pending){
+        this.pending=false;const view=this.getView();if(!view?.canvas)continue
+        try{await this.sendView(view)}catch(err){
+          console.warn('G2 update failed, reconnecting once',err);this.onStatus('G2 kurz getrennt – verbinde neu…');try{this.unsub?.()}catch{};this.unsub=null;this.started=false;this.pageKind='none'
+          await this.ensureBridge(true);this.bindEvents();await this.createScorePage();await this.sendView(view)
+        }
+      }
+      if(this.mode==='score')this.onStatus('G2 aktualisiert.')
+    }finally{this.busy=false}
   }
 
   async sendView(view){
@@ -190,11 +208,14 @@ export class G2Viewer{
   }
 
   async sendCanvas(canvas,preparedBytes=null){
-    const b=await this.ensureBridge();const parts=[[2,'q1',0,0],[3,'q2',288,0],[4,'q3',0,144],[5,'q4',288,144]]
-    const bytes=preparedBytes||await Promise.all(parts.map(([,name,sx,sy])=>quadrantPngBytes(canvas,sx,sy)))
-    // Even SDK image updates must stay serialized. The expensive PNG encoding is
-    // already done in parallel / during neighbor prefetch, so the hardware path
-    // only performs the four required transfers here.
-    for(let i=0;i<parts.length;i++){const [id,name]=parts[i],result=await b.updateImageRawData({containerID:id,containerName:name,imageData:bytes[i]});if(!imageOk(result))throw new Error(`Bild-Update ${name}: ${result}`)}
+    const b=await this.ensureBridge(),parts=[[2,'q1',0,0],[3,'q2',288,0],[4,'q3',0,144],[5,'q4',288,144]]
+    const bytes=preparedBytes||parts.map(([,name,sx,sy])=>quadrantGray4Bytes(canvas,sx,sy))
+    // Four full-screen quadrants are required. Keep sends serial as required by Even,
+    // but send already prepared raw 4-bit grayscale pixels so the phone does no PNG
+    // decode/conversion during a page turn.
+    for(let i=0;i<parts.length;i++){
+      const [id,name]=parts[i],result=await b.updateImageRawData({containerID:id,containerName:name,imageData:bytes[i]})
+      if(!imageOk(result))throw new Error(`Bild-Update ${name}: ${result}`)
+    }
   }
 }
