@@ -261,6 +261,44 @@ export async function quadrantPngBytes(canvas,sx,sy){
 }
 
 
+// Prompter renderer: always shows exactly the selected number of detected staff lines
+// (except when the complete score contains fewer lines). Each step advances the window
+// by exactly one detected staff line. Items may span PDF pages, so this renderer does
+// not depend on all lines sharing the same source canvas.
+export async function processPrompterWindow(view,{contrast=130,invert=false,cutout=true}={},makePreview=false){
+  const items=(view?.items||[]).filter(Boolean)
+  if(!items.length)throw new Error('Keine Notenzeilen für den Prompter vorhanden.')
+  const out=document.createElement('canvas');out.width=576;out.height=288
+  const ctx=out.getContext('2d',{alpha:false,willReadFrequently:true})
+  // Source paper is normally light. Start white, then apply the same ink conversion
+  // as every other score frame so invert/background removal stay identical.
+  ctx.fillStyle='#fff';ctx.fillRect(0,0,576,288)
+  const slotH=288/items.length
+  for(let i=0;i<items.length;i++){
+    const item=items[i],source=item.source
+    if(!source)continue
+    const b=item.bounds||{}
+    const baseH=Math.max(1,(b.bottom??0)-(b.top??0)+1)
+    const padY=Math.max(2,Math.round(baseH*.12))
+    const top=Math.max(0,Math.round((b.top??0)-padY))
+    const bottom=Math.min(source.height-1,Math.round((b.bottom??source.height-1)+padY))
+    const left=Math.max(0,Math.round(b.left??0))
+    const right=Math.min(source.width-1,Math.round(b.right??source.width-1))
+    const sw=Math.max(1,right-left+1),sh=Math.max(1,bottom-top+1)
+    const dy=Math.round(i*slotH),dh=Math.max(1,Math.round((i+1)*slotH)-dy)
+    ctx.drawImage(source,left,top,sw,sh,0,dy,576,dh)
+  }
+  applyInkMode(out,{contrast,invert,cutout})
+  let url=null
+  if(makePreview){
+    const blob=await new Promise((resolve,reject)=>out.toBlob(b=>b?resolve(b):reject(new Error('Prompter-Vorschau konnte nicht erzeugt werden.')),'image/png'))
+    url=URL.createObjectURL(blob)
+  }
+  const g2Parts=await Promise.all([[0,0],[288,0],[0,144],[288,144]].map(([sx,sy])=>quadrantPngBytes(out,sx,sy)))
+  return {canvas:out,url,g2Parts,prompter:true,pageIndex:view.pageIndex,startLine:view.startLine,visibleLines:items.length}
+}
+
+
 export async function processScrollFrame(spec,{contrast=130,invert=false,cutout=true}={},makePreview=false){
   const source=spec?.source
   if(!source)throw new Error('Keine Quelle für Auto-Scroll vorhanden.')

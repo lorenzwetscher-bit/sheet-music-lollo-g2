@@ -1,6 +1,6 @@
 import './style.css'
 import { pdfToCanvases, imageToCanvas, isPdfFile } from './pdf.js'
-import { extractCutDescriptors, buildViews, processView, processScrollFrame } from './score.js'
+import { extractCutDescriptors, buildViews, processView, processScrollFrame, processPrompterWindow } from './score.js'
 import { saveScore, listScores, getScore, deleteScore, fileToStored, storedToFile, listFolders, createFolder, renameFolder, deleteFolder, moveScoreToFolder } from './library.js'
 import { G2Viewer } from './glasses.js'
 import { waitForEvenAppBridge } from '@evenrealities/even_hub_sdk'
@@ -45,6 +45,7 @@ document.querySelector('#app').innerHTML=`
       <div class="shiftBox"><strong>Höhe: <span id="cropHVal">100</span>%</strong><input id="cropHeight" type="range" min="55" max="180" value="100"></div>
       <div class="shiftBox"><strong>Breite: <span id="cropWVal">100</span>%</strong><input id="cropWidth" type="range" min="70" max="150" value="100"></div>
     </div>
+    <div class="setting applyAllCrop"><label class="toggle"><input id="applyCropAll" type="checkbox"> Diese Ausschnitt-Einstellung für alle Seiten übernehmen</label><div class="small">Aus = jede Ansicht kann weiterhin unterschiedlich eingestellt werden.</div></div>
     <div class="row"><button id="resetCrop">Ausschnitt zurücksetzen</button><button id="refreshG2">G2 aktualisieren</button></div>
     <div class="row"><button id="prev">← Zurück</button><button id="next">Weiter →</button></div>
   </div>
@@ -58,6 +59,7 @@ let autoScrollRun=0,autoScrollActive=false
 const cache=new Map()
 let prefetchQueue=[],prefetchBusy=false,prefetchGeneration=0
 const fingerFrameCache=new Map();let fingerPrefetchToken=0
+const prompterCache=new Map();let prompterPrefetchToken=0;let prompterPos=0
 
 const defaultAdj=()=>({cropX:0,cropY:0,cropHeight:100,cropWidth:100})
 const defaultName=f=>(f?.name||'').replace(/\.[^.]+$/,'')
@@ -115,13 +117,48 @@ function scrollSpecAt(plan,progress){
   const y=Math.round(seg.y0+(seg.y1-seg.y0)*local)
   return {source:seg.source,left:seg.left,right:seg.right,top:y,height:seg.viewportH,pageIndex:seg.pageIndex}
 }
+function orderedStaffLines(){
+  return [...descriptors].sort((a,b)=>(a.pageIndex-b.pageIndex)||(a.bounds.top-b.bounds.top)||(a.lineIndex-b.lineIndex))
+}
+function buildPrompterViews(){
+  const all=orderedStaffLines();if(!all.length)return []
+  // Keep the requested number of visible lines constant all the way to the end.
+  // If 4 lines are selected, the windows are 1–4, 2–5, 3–6 ... and the final
+  // window is always the last 4 lines. This also works across PDF page boundaries.
+  const n=Math.max(1,Math.min(linesPerView,all.length)),maxStart=Math.max(0,all.length-n),out=[]
+  for(let i=0;i<=maxStart;i++){
+    const items=all.slice(i,i+n)
+    out.push({pageIndex:items[0]?.pageIndex??0,totalPages,items,startLine:i,globalStart:i})
+  }
+  return out
+}
+function currentPrompterStart(list){
+  if(!list.length)return 0
+  const anchor=views[idx]?.items?.[0]
+  if(!anchor)return 0
+  const found=list.findIndex(v=>v.items?.[0]?.pageIndex===anchor.pageIndex&&v.items?.[0]?.lineIndex===anchor.lineIndex)
+  return found>=0?found:0
+}
+function prompterKey(i){const st=settings(),v=buildPrompterViews()[i];return [i,linesPerView,st.contrast,st.invert?1:0,st.cutout?1:0,v?.items?.[0]?.pageIndex??-1,v?.items?.[0]?.lineIndex??-1,v?.items?.at?.(-1)?.pageIndex??-1,v?.items?.at?.(-1)?.lineIndex??-1].join(':')}
+async function getPrompterFrame(i){
+  const list=buildPrompterViews(),v=list[i];if(!v)return null
+  const key=prompterKey(i);if(prompterCache.has(key))return prompterCache.get(key)
+  const frame=await processPrompterWindow(v,settings(),false);prompterCache.set(key,frame)
+  while(prompterCache.size>8)prompterCache.delete(prompterCache.keys().next().value)
+  return frame
+}
+function prefetchPrompter(center,dir=1){
+  const list=buildPrompterViews(),token=++prompterPrefetchToken
+  const order=dir>=0?[1,2,-1,3]:[-1,-2,1,-3]
+  setTimeout(async()=>{for(const d of order){if(token!==prompterPrefetchToken)return;const i=center+d;if(i<0||i>=list.length)continue;try{await getPrompterFrame(i)}catch{};await new Promise(r=>setTimeout(r,0))}},0)
+}
 function updateScrollCalc(){
-  const sec=scrollDurationSeconds(),plan=buildScrollPlan(),label=$('#scrollDurationLabel'),info=$('#scrollCalc')
+  const sec=scrollDurationSeconds(),list=buildPrompterViews(),label=$('#scrollDurationLabel'),info=$('#scrollCalc')
   if(label)label.textContent=formatTime(sec)
   if(!info)return
-  if(!plan){info.textContent=`Dauer bis Notenende: ${formatTime(sec)} · startet ab aktueller Ansicht`;return}
-  const pxs=plan.totalPixels/sec,step=pxs*.9
-  info.textContent=`Bis Notenende: ${formatTime(sec)} · ca. ${pxs.toFixed(1)} px/s · ${step.toFixed(1)} px je ~0,9 s`
+  if(!list.length){info.textContent=`Bis Notenende: ${formatTime(sec)} · zeilenweise`;return}
+  const start=currentPrompterStart(list),steps=Math.max(0,list.length-1-start),per=steps?sec/steps:sec
+  info.textContent=`Bis Notenende: ${formatTime(sec)} · ${linesPerView} Zeile${linesPerView===1?'':'n'} sichtbar · 1 Schritt = exakt 1 Notenzeile · ca. alle ${per.toFixed(1)} s`
 }
 function stopAutoScroll(message='Auto-Scroll gestoppt.'){
   if(!autoScrollActive)return
@@ -133,25 +170,23 @@ async function startAutoScroll(){
   if(!$('#scrollEnabled').checked)return $('#status').textContent='Scrollen ist ausgeschaltet.'
   if(document.querySelector('input[name="scrollMode"]:checked')?.value!=='time')return $('#status').textContent='Für Auto-Scroll bitte „Nach Zeit“ auswählen.'
   if(autoScrollActive){stopAutoScroll();return}
-  if(!views.length)return $('#status').textContent='Bitte zuerst Notenzeilen erkennen.'
-  const plan=buildScrollPlan();if(!plan)return $('#status').textContent='Auto-Scroll konnte nicht vorbereitet werden.'
-  const durationMs=scrollDurationSeconds()*1000,run=++autoScrollRun,startAt=performance.now(),targetFrameMs=900
-  autoScrollActive=true;$('#autoScrollBtn').textContent='⏹ Auto-Scroll stoppen'
+  const list=buildPrompterViews();if(!list.length)return $('#status').textContent='Bitte zuerst Notenzeilen erkennen.'
+  const startIndex=currentPrompterStart(list),remaining=Math.max(0,list.length-1-startIndex)
+  if(!remaining)return $('#status').textContent='Notenende bereits erreicht.'
+  const durationMs=scrollDurationSeconds()*1000,stepMs=durationMs/remaining,run=++autoScrollRun
+  autoScrollActive=true;prompterPos=startIndex;$('#autoScrollBtn').textContent='⏹ Auto-Scroll stoppen'
   const v=ensureViewer();v.setAutoScrolling?.(true)
   try{
-    // Ensure the existing image page is active once. Afterwards only image data changes.
-    await v.start()
-    let lastFrameAt=-Infinity
-    while(run===autoScrollRun&&autoScrollActive){
-      const now=performance.now(),elapsed=Math.min(durationMs,now-startAt),progress=durationMs?elapsed/durationMs:1
-      if(now-lastFrameAt<targetFrameMs&&progress<1){await new Promise(r=>setTimeout(r,Math.max(20,targetFrameMs-(now-lastFrameAt))));continue}
-      lastFrameAt=performance.now()
-      const spec=scrollSpecAt(plan,progress),frame=await processScrollFrame(spec,settings(),false)
+    await v.start();prefetchPrompter(prompterPos,1)
+    const started=performance.now()
+    for(let n=1;n<=remaining&&run===autoScrollRun&&autoScrollActive;n++){
+      const due=started+n*stepMs,wait=due-performance.now();if(wait>0)await new Promise(r=>setTimeout(r,wait))
       if(run!==autoScrollRun||!autoScrollActive)break
-      await v.showPreparedView(frame)
-      const remain=Math.max(0,(durationMs-(performance.now()-startAt))/1000)
-      $('#status').textContent=`Auto-Scroll läuft · noch ${formatTime(remain)} bis Notenende`
-      if(progress>=1)break
+      prompterPos=startIndex+n
+      const frame=await getPrompterFrame(prompterPos);if(!frame)break
+      await v.showPreparedView(frame);prefetchPrompter(prompterPos,1)
+      const pv=list[prompterPos],remain=Math.max(0,(durationMs-(performance.now()-started))/1000)
+      $('#status').textContent=`Prompter · Zeile ${prompterPos-startIndex+1}/${remaining+1} · Seite ${pv.pageIndex+1}/${totalPages} · noch ${formatTime(remain)}`
     }
     if(run===autoScrollRun&&autoScrollActive){autoScrollActive=false;v.setAutoScrolling?.(false);$('#autoScrollBtn').textContent='▶ Auto-Scroll bis Notenende';$('#status').textContent='Auto-Scroll: Notenende erreicht.'}
   }catch(e){console.error(e);if(run===autoScrollRun){autoScrollActive=false;v.setAutoScrolling?.(false);$('#autoScrollBtn').textContent='▶ Auto-Scroll bis Notenende';$('#status').textContent='Auto-Scroll fehlgeschlagen: '+(e?.message||e)}}
@@ -193,17 +228,27 @@ function settings(){return {contrast:+$('#contrast').value,invert:$('#invert').c
 function keyFor(i){const a=adjustments[i]||defaultAdj(),s=settings();return `${i}|${linesPerView}|${s.contrast}|${s.invert}|${s.cutout}|${a.cropX}|${a.cropY}|${a.cropHeight}|${a.cropWidth}`}
 function ensureAdjustments(){while(adjustments.length<views.length)adjustments.push(defaultAdj());if(adjustments.length>views.length)adjustments.length=views.length}
 function revokeResult(r){if(r?.url)URL.revokeObjectURL(r.url)}
-function clearCache(){prefetchGeneration++;prefetchQueue=[];fingerPrefetchToken++;fingerFrameCache.clear();for(const r of cache.values())revokeResult(r);cache.clear();viewResults=[]}
+function clearCache(){prefetchGeneration++;prefetchQueue=[];fingerPrefetchToken++;fingerFrameCache.clear();prompterPrefetchToken++;prompterCache.clear();for(const r of cache.values())revokeResult(r);cache.clear();viewResults=[]}
 
 function rebuildViews(resetAdj=false){const old=adjustments;views=buildViews(descriptors,linesPerView,totalPages);adjustments=resetAdj?[]:old;ensureAdjustments();idx=Math.min(idx,Math.max(0,views.length-1));clearCache();showMeta()}
 
-document.querySelectorAll('[data-rows]').forEach(b=>b.onclick=()=>{
-  const anchor=views[idx]?.items?.[0]
+document.querySelectorAll('[data-rows]').forEach(b=>b.onclick=async()=>{
+  const oldPrompter=buildPrompterViews(),oldAnchor=oldPrompter[prompterPos]?.items?.[0]||views[idx]?.items?.[0]
+  const normalAnchor=views[idx]?.items?.[0]
   linesPerView=+b.dataset.rows
   document.querySelectorAll('[data-rows]').forEach(x=>x.classList.toggle('active',x===b));$('#rowsLabel').textContent=linesPerView
   rebuildViews(true)
-  if(anchor){const keep=views.findIndex(v=>v.items?.some(it=>it.pageIndex===anchor.pageIndex&&it.lineIndex===anchor.lineIndex));if(keep>=0)idx=keep}
-  showMeta();updateScrollCalc();scheduleRender(true)
+  prompterCache.clear();prompterPrefetchToken++
+  if(normalAnchor){const keep=views.findIndex(v=>v.items?.some(it=>it.pageIndex===normalAnchor.pageIndex&&it.lineIndex===normalAnchor.lineIndex));if(keep>=0)idx=keep}
+  const newPrompter=buildPrompterViews()
+  if(oldAnchor){const keepP=newPrompter.findIndex(v=>v.items?.[0]?.pageIndex===oldAnchor.pageIndex&&v.items?.[0]?.lineIndex===oldAnchor.lineIndex);prompterPos=keepP>=0?keepP:currentPrompterStart(newPrompter)}else prompterPos=currentPrompterStart(newPrompter)
+  showMeta();updateScrollCalc()
+  // In both scroll modes the row selector controls the actual G2 prompter window.
+  if($('#scrollEnabled').checked&&newPrompter.length){
+    try{
+      const frame=await getPrompterFrame(prompterPos);if(frame){const u=await ensurePreviewUrl(frame);if(u)$('#preview').src=u;await ensureViewer().showPreparedView(frame);prefetchPrompter(prompterPos,1)}
+    }catch(e){console.warn('Prompter-Zeilenwechsel',e)}
+  }else scheduleRender(true)
 })
 
 async function ensurePreviewUrl(r){
@@ -265,9 +310,12 @@ async function go(i){if(i<0||i>=views.length)return;idx=i;showMeta();await rende
 $('#prev').onclick=()=>go(idx-1);$('#next').onclick=()=>go(idx+1)
 
 function syncCrop(){const a=adjustments[idx]||defaultAdj();for(const [id,k] of [['cropX','cropX'],['cropY','cropY'],['cropHeight','cropHeight'],['cropWidth','cropWidth']])$('#'+id).value=a[k];$('#cropXVal').textContent=a.cropX;$('#cropYVal').textContent=a.cropY;$('#cropHVal').textContent=a.cropHeight;$('#cropWVal').textContent=a.cropWidth}
-function cropChanged(){adjustments[idx]={cropX:+$('#cropX').value,cropY:+$('#cropY').value,cropHeight:+$('#cropHeight').value,cropWidth:+$('#cropWidth').value};$('#cropXVal').textContent=$('#cropX').value;$('#cropYVal').textContent=$('#cropY').value;$('#cropHVal').textContent=$('#cropHeight').value;$('#cropWVal').textContent=$('#cropWidth').value;clearCache();scheduleRender(true)}
+function readCropControls(){return {cropX:+$('#cropX').value,cropY:+$('#cropY').value,cropHeight:+$('#cropHeight').value,cropWidth:+$('#cropWidth').value}}
+function applyCropToAll(adj){ensureAdjustments();for(let i=0;i<adjustments.length;i++)adjustments[i]={...adj}}
+function cropChanged(){const next=readCropControls();if($('#applyCropAll')?.checked)applyCropToAll(next);else adjustments[idx]=next;$('#cropXVal').textContent=$('#cropX').value;$('#cropYVal').textContent=$('#cropY').value;$('#cropHVal').textContent=$('#cropHeight').value;$('#cropWVal').textContent=$('#cropWidth').value;clearCache();scheduleRender(true)}
 for(const id of ['cropX','cropY','cropHeight','cropWidth'])$('#'+id).oninput=cropChanged
-$('#resetCrop').onclick=()=>{adjustments[idx]=defaultAdj();syncCrop();clearCache();scheduleRender(true)}
+$('#applyCropAll').onchange=()=>{if($('#applyCropAll').checked){applyCropToAll(readCropControls());clearCache();scheduleRender(true)}}
+$('#resetCrop').onclick=()=>{const next=defaultAdj();if($('#applyCropAll')?.checked)applyCropToAll(next);else adjustments[idx]=next;syncCrop();clearCache();scheduleRender(true)}
 $('#refreshG2').onclick=async()=>{if(!viewer)return $('#status').textContent='G2 zuerst verbinden.';await viewer.requestRender(true)}
 
 async function loadSelectedFile(f){
@@ -323,34 +371,17 @@ function syncScrollOptions(){
   viewer?.setScrollOptions?.({enabled,finger:enabled&&mode==='finger'})
   $('#autoScrollBtn').disabled=!views.length||!enabled||mode!=='time'
   if((!enabled||mode!=='time')&&autoScrollActive)stopAutoScroll('Scrollen gestoppt.')
-}
-function fingerFrameKey(spec){const st=settings();return [spec.pageIndex,spec.left,spec.right,spec.top,spec.height,st.contrast,st.invert?1:0,st.cutout?1:0].join(':')}
-async function getFingerFrame(spec){
-  const key=fingerFrameKey(spec)
-  if(fingerFrameCache.has(key))return fingerFrameCache.get(key)
-  const frame=await processScrollFrame(spec,settings(),false)
-  fingerFrameCache.set(key,frame)
-  while(fingerFrameCache.size>4)fingerFrameCache.delete(fingerFrameCache.keys().next().value)
-  return frame
-}
-function prefetchFingerFrame(plan,dir){
-  const token=++fingerPrefetchToken
-  const nextProgress=Math.max(0,Math.min(1,fingerScrollProgress+dir*(1/Math.max(1,plan.totalWeight))))
-  if(nextProgress===fingerScrollProgress)return
-  const spec=scrollSpecAt(plan,nextProgress)
-  setTimeout(async()=>{if(token!==fingerPrefetchToken)return;try{await getFingerFrame(spec)}catch{}},0)
+  const list=buildPrompterViews();if(prompterPos<0||prompterPos>=list.length)prompterPos=currentPrompterStart(list);updateScrollCalc()
 }
 async function fingerScrollStep(dir){
   if(!$('#scrollEnabled').checked||document.querySelector('input[name="scrollMode"]:checked')?.value!=='finger')return
-  const plan=buildScrollPlan();if(!plan)return
-  // Finest useful source movement: exactly ONE source pixel per swipe.
-  const stepUnits=1
-  fingerScrollProgress=Math.max(0,Math.min(1,fingerScrollProgress+dir*(stepUnits/Math.max(1,plan.totalWeight))))
-  const spec=scrollSpecAt(plan,fingerScrollProgress)
-  const frame=await getFingerFrame(spec)
-  await ensureViewer().showPreparedView(frame)
-  prefetchFingerFrame(plan,dir)
-  if(spec.pageIndex!==fingerScrollPage){fingerScrollPage=spec.pageIndex;$('#status').textContent=`Fingerscroll · PDF/Foto-Seite ${spec.pageIndex+1}/${totalPages}`}
+  const list=buildPrompterViews();if(!list.length)return
+  if(prompterPos<0||prompterPos>=list.length)prompterPos=currentPrompterStart(list)
+  const next=Math.max(0,Math.min(list.length-1,prompterPos+(dir>0?1:-1)));if(next===prompterPos)return
+  prompterPos=next
+  const frame=await getPrompterFrame(prompterPos);if(!frame)return
+  await ensureViewer().showPreparedView(frame);prefetchPrompter(prompterPos,dir)
+  const pv=list[prompterPos];$('#status').textContent=`Finger-Prompter · ${linesPerView} Zeile${linesPerView===1?'':'n'} sichtbar · eine Zeile weiter · Seite ${pv.pageIndex+1}/${totalPages}`
 }
 function ensureViewer(){
   if(viewer)return viewer
