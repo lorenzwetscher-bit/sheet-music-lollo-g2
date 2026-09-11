@@ -113,10 +113,9 @@ async function renderView(i,{force=false,preview=true}={}){
 function queuePrefetch(center=idx){
   const gen=++prefetchGeneration
   const order=[]
-  // Nearest pages first: these are the ones a musician is most likely to request next.
-  for(let d=1;d<=4;d++){if(center+d<views.length)order.push(center+d);if(center-d>=0)order.push(center-d)}
-  // Then prepare the rest in the background so a longer performance stays instant.
-  for(let i=0;i<views.length;i++)if(i!==center&&!order.includes(i))order.push(i)
+  // Keep the phone responsive and the BLE bridge stable: only prepare the pages
+  // that can realistically be requested next, never the whole score at once.
+  for(const d of [1,-1,2,3]){const i=center+d;if(i>=0&&i<views.length&&!order.includes(i))order.push(i)}
   prefetchQueue=order.map(i=>({i,gen}))
   runPrefetchQueue().catch(()=>{})
 }

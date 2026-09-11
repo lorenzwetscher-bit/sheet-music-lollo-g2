@@ -247,33 +247,12 @@ export async function processView(view,{contrast=130,invert=false,cutout=true,cr
     const blob=await new Promise((resolve,reject)=>out.toBlob(b=>b?resolve(b):reject(new Error('Vorschau konnte nicht erzeugt werden.')),'image/png'))
     url=URL.createObjectURL(blob)
   }
-  // Prepare raw 4-bit grayscale data now. The SDK compresses this internally,
-  // avoiding PNG decode/conversion on the phone during every page turn.
-  const g2Parts=[[0,0],[288,0],[0,144],[288,144]].map(([sx,sy])=>quadrantGray4Bytes(out,sx,sy))
+  // PNG bytes are prepared before a page turn. This is the reliable format used
+  // by the hardware path; only the already encoded bytes cross BLE during swipe.
+  const g2Parts=await Promise.all([[0,0],[288,0],[0,144],[288,144]].map(([sx,sy])=>quadrantPngBytes(out,sx,sy)))
   return {canvas:out,url,g2Parts}
 }
 
-export function canvasGray4Bytes(canvas){
-  const ctx=canvas.getContext('2d',{willReadFrequently:true}),im=ctx.getImageData(0,0,canvas.width,canvas.height).data
-  const out=new Uint8Array(canvas.width*canvas.height)
-  for(let p=0,i=0;p<out.length;p++,i+=4){
-    const lum=Math.round(.2126*im[i]+.7152*im[i+1]+.0722*im[i+2])
-    out[p]=Math.max(0,Math.min(15,Math.round(lum/17)))
-  }
-  return out
-}
-
-export function quadrantGray4Bytes(canvas,sx,sy){
-  const ctx=canvas.getContext('2d',{willReadFrequently:true}),im=ctx.getImageData(sx,sy,288,144).data
-  const out=new Uint8Array(288*144)
-  for(let p=0,i=0;p<out.length;p++,i+=4){
-    const lum=Math.round(.2126*im[i]+.7152*im[i+1]+.0722*im[i+2])
-    out[p]=Math.max(0,Math.min(15,Math.round(lum/17)))
-  }
-  return out
-}
-
-// Kept for compatibility with older code/tests; G2 runtime uses raw gray4 above.
 export async function quadrantPngBytes(canvas,sx,sy){
   const c=document.createElement('canvas');c.width=288;c.height=144
   c.getContext('2d').drawImage(canvas,sx,sy,288,144,0,0,288,144)
