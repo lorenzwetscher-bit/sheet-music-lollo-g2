@@ -1,20 +1,27 @@
 import * as pdfjsLib from 'pdfjs-dist'
-import PdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker&inline'
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { heicTo } from 'heic-to/csp'
 import * as UTIF from 'utif'
 
-// Keep the PDF worker inside the Even Hub bundle. The Even App WebView serves
-// plugins from a local 127.0.0.1 origin, so dynamically fetching the worker can fail.
-try {
-  pdfjsLib.GlobalWorkerOptions.workerPort = new PdfWorker()
-} catch (err) {
-  console.warn('PDF worker initialization failed', err)
+// Vite/PDF.js: use a real emitted worker asset instead of an inline Worker.
+// This works both on localhost and in the packaged Even app.
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
+
+export async function isPdfFile(file){
+  if(!file)return false
+  const type=String(file.type||'').toLowerCase()
+  const name=String(file.name||'').toLowerCase()
+  if(type==='application/pdf'||type.includes('/pdf')||name.endsWith('.pdf'))return true
+  try{
+    const head=new Uint8Array(await file.slice(0,5).arrayBuffer())
+    return head.length>=5 && head[0]===0x25 && head[1]===0x50 && head[2]===0x44 && head[3]===0x46 && head[4]===0x2d
+  }catch{return false}
 }
 
 export async function pdfToCanvases(file){
   try{
     const data = new Uint8Array(await file.arrayBuffer())
-    const task = pdfjsLib.getDocument({ data })
+    const task = pdfjsLib.getDocument({ data, useWasm:false, isEvalSupported:false, useWorkerFetch:false })
     const pdf = await task.promise
     const pages=[]
 
@@ -31,11 +38,19 @@ export async function pdfToCanvases(file){
       pages.push(c)
     }
 
-    await pdf.destroy()
+    // Cleanup must never turn an otherwise successful PDF import into an error.
+    // PDF.js versions/environments expose cleanup/destroy on different objects.
+    try {
+      if (typeof pdf.cleanup === 'function') await pdf.cleanup()
+      if (typeof task.destroy === 'function') await task.destroy()
+      else if (typeof pdf.destroy === 'function') await pdf.destroy()
+    } catch (cleanupErr) {
+      console.warn('PDF cleanup skipped', cleanupErr)
+    }
     return pages
   }catch(err){
     console.error('PDF import failed',err)
-    throw new Error('PDF konnte nicht gelesen werden. Bitte PDF erneut auswählen.')
+    throw new Error('PDF konnte nicht gelesen werden: '+(err?.message||String(err)))
   }
 }
 

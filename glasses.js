@@ -30,7 +30,7 @@ export class G2Viewer{
     this.onStatus=onStatus||(()=>{});this.getLibrary=getLibrary||(()=>Promise.resolve({scores:[],folders:[]}));this.onOpenSaved=onOpenSaved||(()=>Promise.resolve())
     this.bridge=null;this.unsub=null;this.launchUnsub=null;this.started=false;this.mode='none'
     this.busy=false;this.pending=false;this.libraryScores=[];this.libraryFolders=[];this.libraryItems=[];this.librarySelected=0;this.libraryFolderId=null
-    this.startupReady=Promise.resolve();this.navigating=false;this.lastEventAt=0;this.logoPromise=null
+    this.startupReady=Promise.resolve();this.navigating=false;this.lastEventAt=0;this.logoPromise=null;this.imagePageReady=false
   }
 
   async ensureBridge(force=false){if(force)this.bridge=null;if(!this.bridge)this.bridge=await waitForEvenAppBridge();return this.bridge}
@@ -58,7 +58,16 @@ export class G2Viewer{
 
   pagePayload(){return {containerTotalNum:5,textObject:[{xPosition:0,yPosition:0,width:576,height:288,borderWidth:0,borderColor:0,paddingLength:0,containerID:1,containerName:'events',content:' ',isEventCapture:1,zOrderIndex:1}],imageObject:[{xPosition:0,yPosition:0,width:288,height:144,containerID:2,containerName:'q1',zOrderIndex:2},{xPosition:288,yPosition:0,width:288,height:144,containerID:3,containerName:'q2',zOrderIndex:3},{xPosition:0,yPosition:144,width:288,height:144,containerID:4,containerName:'q3',zOrderIndex:4},{xPosition:288,yPosition:144,width:288,height:144,containerID:5,containerName:'q4',zOrderIndex:5}]}}
 
-  async createImagePage(mode,rebuild=true){const b=await this.ensureBridge(),payload=this.pagePayload();const res=(this.started||rebuild)?await b.rebuildPageContainer(payload):await b.createStartUpPageContainer(payload);if(!pageOk(res))throw new Error((mode==='library'?'Bibliothek':'Notenansicht')+' konnte nicht erstellt werden: '+res);this.started=true;this.mode=mode}
+  async createImagePage(mode,rebuild=true){
+    // Library and score use the exact same 4-image page layout. Rebuilding the
+    // page container on every swipe/click is expensive on real G2 hardware, so
+    // only build it once after the startup screen (or after a reconnect).
+    if(this.imagePageReady){this.mode=mode;return}
+    const b=await this.ensureBridge(),payload=this.pagePayload();
+    const res=this.started?await b.rebuildPageContainer(payload):await b.createStartUpPageContainer(payload)
+    if(!pageOk(res))throw new Error((mode==='library'?'Bibliothek':'Notenansicht')+' konnte nicht erstellt werden: '+res)
+    this.started=true;this.imagePageReady=true;this.mode=mode
+  }
   async createScorePage(rebuild=false){await this.createImagePage('score',rebuild)}
 
   rebuildLibraryItems(){
@@ -124,14 +133,14 @@ export class G2Viewer{
     for(let i=0;i<count;i++){const x=start+i*spacing;ctx.beginPath();ctx.arc(x,y,i===currentPage?4.5:2.8,0,Math.PI*2);if(i===currentPage)ctx.fill();else ctx.stroke()}
   }
 
-  async renderLibrary(){await this.createImagePage('library',true);const canvas=await this.libraryCanvas();await this.sendCanvas(canvas);this.onStatus(this.libraryItems.length?'G2-Bibliothek bereit: Swipe zur Auswahl, Klick zum Öffnen.':'G2-Bibliothek bereit – noch keine Noten gespeichert.')}
+  async renderLibrary(){await this.createImagePage('library',false);const canvas=await this.libraryCanvas();await this.sendCanvas(canvas);this.onStatus(this.libraryItems.length?'G2-Bibliothek bereit: Swipe zur Auswahl, Klick zum Öffnen.':'G2-Bibliothek bereit – noch keine Noten gespeichert.')}
   async showLibrary(reload=true){await this.ensureBridge();this.bindEvents();if(reload)await this.reloadLibrary();else this.rebuildLibraryItems();await this.renderLibrary()}
 
   async openSelectedLibraryItem(){
     const item=this.libraryItems[this.librarySelected];if(!item)return
     if(item.kind==='back'){this.libraryFolderId=null;this.librarySelected=0;this.rebuildLibraryItems();await this.renderLibrary();return}
     if(item.kind==='folder'){this.libraryFolderId=item.id;this.librarySelected=0;this.rebuildLibraryItems();await this.renderLibrary();return}
-    if(item.kind==='score'&&item.id){this.onStatus('Öffne Noten auf der G2…');await this.onOpenSaved(item.id);await this.createScorePage(true);await this.requestRender(true)}
+    if(item.kind==='score'&&item.id){this.onStatus('Öffne Noten auf der G2…');await this.onOpenSaved(item.id);await this.createScorePage(false);await this.requestRender(true)}
   }
 
   async moveLibrarySelection(delta){
@@ -171,8 +180,21 @@ export class G2Viewer{
 
   async flush(){
     if(this.busy)return;this.busy=true
-    try{while(this.pending){this.pending=false;const view=this.getView();if(!view?.canvas)continue;try{await this.sendCanvas(view.canvas)}catch(err){console.warn('G2 update failed, reconnecting once',err);this.onStatus('G2 kurz getrennt – verbinde neu…');try{this.unsub?.()}catch{};this.unsub=null;this.started=false;await this.ensureBridge(true);this.bindEvents();await this.createScorePage(false);await this.sendCanvas(view.canvas)}}if(this.mode==='score')this.onStatus('G2 automatisch aktualisiert.')}finally{this.busy=false}
+    try{while(this.pending){this.pending=false;const view=this.getView();if(!view?.canvas)continue;try{await this.sendView(view)}catch(err){console.warn('G2 update failed, reconnecting once',err);this.onStatus('G2 kurz getrennt – verbinde neu…');try{this.unsub?.()}catch{};this.unsub=null;this.started=false;this.imagePageReady=false;await this.ensureBridge(true);this.bindEvents();await this.createScorePage(false);await this.sendView(view)}}if(this.mode==='score')this.onStatus('G2 automatisch aktualisiert.')}finally{this.busy=false}
   }
 
-  async sendCanvas(canvas){const b=await this.ensureBridge();const parts=[[2,'q1',0,0],[3,'q2',288,0],[4,'q3',0,144],[5,'q4',288,144]],bytes=[];for(const [,name,sx,sy] of parts)bytes.push([name,await quadrantPngBytes(canvas,sx,sy)]);for(let i=0;i<parts.length;i++){const [id,name]=parts[i],result=await b.updateImageRawData({containerID:id,containerName:name,imageData:bytes[i][1]});if(!imageOk(result))throw new Error(`Bild-Update ${name}: ${result}`)}}
+  async sendView(view){
+    if(!view?.canvas)return
+    const bytes=Array.isArray(view.g2Parts)&&view.g2Parts.length===4?view.g2Parts:null
+    await this.sendCanvas(view.canvas,bytes)
+  }
+
+  async sendCanvas(canvas,preparedBytes=null){
+    const b=await this.ensureBridge();const parts=[[2,'q1',0,0],[3,'q2',288,0],[4,'q3',0,144],[5,'q4',288,144]]
+    const bytes=preparedBytes||await Promise.all(parts.map(([,name,sx,sy])=>quadrantPngBytes(canvas,sx,sy)))
+    // Even SDK image updates must stay serialized. The expensive PNG encoding is
+    // already done in parallel / during neighbor prefetch, so the hardware path
+    // only performs the four required transfers here.
+    for(let i=0;i<parts.length;i++){const [id,name]=parts[i],result=await b.updateImageRawData({containerID:id,containerName:name,imageData:bytes[i]});if(!imageOk(result))throw new Error(`Bild-Update ${name}: ${result}`)}
+  }
 }

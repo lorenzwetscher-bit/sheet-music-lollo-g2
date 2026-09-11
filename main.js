@@ -1,5 +1,5 @@
 import './style.css'
-import { pdfToCanvases, imageToCanvas } from './pdf.js'
+import { pdfToCanvases, imageToCanvas, isPdfFile } from './pdf.js'
 import { extractCutDescriptors, buildViews, processView } from './score.js'
 import { saveScore, listScores, getScore, deleteScore, fileToStored, storedToFile, listFolders, createFolder, moveScoreToFolder } from './library.js'
 import { G2Viewer } from './glasses.js'
@@ -130,8 +130,10 @@ $('#resetCrop').onclick=()=>{adjustments[idx]=defaultAdj();syncCrop();clearCache
 $('#refreshG2').onclick=async()=>{if(!viewer)return $('#status').textContent='G2 zuerst verbinden.';await viewer.requestRender(true)}
 
 async function loadSelectedFile(f){
-  return f.type==='application/pdf'?await pdfToCanvases(f):[await imageToCanvas(f)]
+  if(await isPdfFile(f))return await pdfToCanvases(f)
+  return [await imageToCanvas(f)]
 }
+
 
 async function processFile(f){$('#detect').disabled=true;$('#save').disabled=true;$('#startG2').disabled=true;$('#result').style.display='none';$('#status').textContent='Lese Datei…';try{pages=await loadSelectedFile(f);totalPages=pages.length;descriptors=[];for(let i=0;i<pages.length;i++){ $('#status').textContent=`Erkenne Noten auf Seite ${i+1}/${pages.length}…`;descriptors.push(...extractCutDescriptors(pages[i],i)) } rebuildViews(true);if(!views.length)throw new Error('Keine Notenzeilen gefunden.');$('#result').style.display='block';$('#save').disabled=false;$('#startG2').disabled=false;await renderCurrent({pushG2:false});$('#status').textContent=`Fertig – ${views.length} Ansichten aus ${descriptors.length} erkannten Zeilen.`}catch(e){console.error(e);$('#status').textContent='Fehler: '+(e?.message||e)}finally{$('#detect').disabled=!file}}
 $('#detect').onclick=()=>file&&processFile(file)

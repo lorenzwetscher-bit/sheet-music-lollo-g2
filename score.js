@@ -244,7 +244,10 @@ export async function processView(view,{contrast=130,invert=false,cutout=true,cr
   ctx.drawImage(raw,0,0,raw.width,raw.height,0,0,576,288)
   applyInkMode(out,{contrast,invert,cutout})
   const blob=await new Promise((resolve,reject)=>out.toBlob(b=>b?resolve(b):reject(new Error('Vorschau konnte nicht erzeugt werden.')),'image/png'))
-  return {canvas:out,url:URL.createObjectURL(blob)}
+  // Pre-encode all four G2 quadrants while the view is rendered. Neighbor views are
+  // rendered in the background, so swiping can send ready-to-use bytes immediately.
+  const g2Parts=await Promise.all([[0,0],[288,0],[0,144],[288,144]].map(([sx,sy])=>quadrantPngBytes(out,sx,sy)))
+  return {canvas:out,url:URL.createObjectURL(blob),g2Parts}
 }
 
 export async function quadrantPngBytes(canvas,sx,sy){
