@@ -1,3 +1,4 @@
+import { tr } from './i18n.js'
 function smooth(a,r){
   const out=new Array(a.length).fill(0)
   for(let i=0;i<a.length;i++){
@@ -193,7 +194,7 @@ function clamp(v,min,max){return Math.max(min,Math.min(max,v))}
 
 function cropView(view,adj={}){
   const items=view.items||[]
-  if(!items.length)throw new Error('Kein Ausschnitt vorhanden.')
+  if(!items.length)throw new Error(tr('Kein Ausschnitt vorhanden.','No crop available.'))
   const c=items[0].source,w=c.width,h=c.height
   let left=Math.min(...items.map(x=>x.bounds.left)),right=Math.max(...items.map(x=>x.bounds.right))
   let top=Math.min(...items.map(x=>x.bounds.top)),bottom=Math.max(...items.map(x=>x.bounds.bottom))
@@ -244,7 +245,7 @@ export async function processView(view,{contrast=130,invert=false,cutout=true,cr
   applyInkMode(out,{contrast,invert,cutout})
   let url=null
   if(makePreview){
-    const blob=await new Promise((resolve,reject)=>out.toBlob(b=>b?resolve(b):reject(new Error('Vorschau konnte nicht erzeugt werden.')),'image/png'))
+    const blob=await new Promise((resolve,reject)=>out.toBlob(b=>b?resolve(b):reject(new Error(tr('Vorschau konnte nicht erzeugt werden.','Preview could not be created.'))),'image/png'))
     url=URL.createObjectURL(blob)
   }
   // PNG bytes are prepared before a page turn. This is the reliable format used
@@ -256,7 +257,7 @@ export async function processView(view,{contrast=130,invert=false,cutout=true,cr
 export async function quadrantPngBytes(canvas,sx,sy){
   const c=document.createElement('canvas');c.width=288;c.height=144
   c.getContext('2d').drawImage(canvas,sx,sy,288,144,0,0,288,144)
-  const blob=await new Promise((resolve,reject)=>c.toBlob(b=>b?resolve(b):reject(new Error('G2-Bild konnte nicht erzeugt werden.')),'image/png'))
+  const blob=await new Promise((resolve,reject)=>c.toBlob(b=>b?resolve(b):reject(new Error(tr('G2-Bild konnte nicht erzeugt werden.','G2 image could not be created.'))),'image/png'))
   return new Uint8Array(await blob.arrayBuffer())
 }
 
@@ -267,7 +268,7 @@ export async function quadrantPngBytes(canvas,sx,sy){
 // not depend on all lines sharing the same source canvas.
 export async function processPrompterWindow(view,{contrast=130,invert=false,cutout=true}={},makePreview=false){
   const items=(view?.items||[]).filter(Boolean)
-  if(!items.length)throw new Error('Keine Notenzeilen für den Prompter vorhanden.')
+  if(!items.length)throw new Error(tr('Keine Notenzeilen für den Prompter vorhanden.','No music lines available for the prompter.'))
   const out=document.createElement('canvas');out.width=576;out.height=288
   const ctx=out.getContext('2d',{alpha:false,willReadFrequently:true})
   // Source paper is normally light. Start white, then apply the same ink conversion
@@ -291,7 +292,7 @@ export async function processPrompterWindow(view,{contrast=130,invert=false,cuto
   applyInkMode(out,{contrast,invert,cutout})
   let url=null
   if(makePreview){
-    const blob=await new Promise((resolve,reject)=>out.toBlob(b=>b?resolve(b):reject(new Error('Prompter-Vorschau konnte nicht erzeugt werden.')),'image/png'))
+    const blob=await new Promise((resolve,reject)=>out.toBlob(b=>b?resolve(b):reject(new Error(tr('Prompter-Vorschau konnte nicht erzeugt werden.','Prompter preview could not be created.'))),'image/png'))
     url=URL.createObjectURL(blob)
   }
   const g2Parts=await Promise.all([[0,0],[288,0],[0,144],[288,144]].map(([sx,sy])=>quadrantPngBytes(out,sx,sy)))
@@ -301,7 +302,7 @@ export async function processPrompterWindow(view,{contrast=130,invert=false,cuto
 
 export async function processScrollFrame(spec,{contrast=130,invert=false,cutout=true}={},makePreview=false){
   const source=spec?.source
-  if(!source)throw new Error('Keine Quelle für Auto-Scroll vorhanden.')
+  if(!source)throw new Error(tr('Keine Quelle für Auto-Scroll vorhanden.','No source available for auto-scroll.'))
   const left=Math.max(0,Math.min(source.width-1,Math.round(spec.left||0)))
   const right=Math.max(left,Math.min(source.width-1,Math.round(spec.right??source.width-1)))
   const top=Math.max(0,Math.min(source.height-1,Math.round(spec.top||0)))
@@ -313,7 +314,7 @@ export async function processScrollFrame(spec,{contrast=130,invert=false,cutout=
   ctx.drawImage(source,left,top,width,height,0,0,576,288)
   applyInkMode(out,{contrast,invert,cutout})
   let url=null
-  if(makePreview){const blob=await new Promise((resolve,reject)=>out.toBlob(b=>b?resolve(b):reject(new Error('Auto-Scroll-Vorschau konnte nicht erzeugt werden.')),'image/png'));url=URL.createObjectURL(blob)}
+  if(makePreview){const blob=await new Promise((resolve,reject)=>out.toBlob(b=>b?resolve(b):reject(new Error(tr('Auto-Scroll-Vorschau konnte nicht erzeugt werden.','Auto-scroll preview could not be created.'))),'image/png'));url=URL.createObjectURL(blob)}
   const g2Parts=await Promise.all([[0,0],[288,0],[0,144],[288,144]].map(([sx,sy])=>quadrantPngBytes(out,sx,sy)))
   return {canvas:out,url,g2Parts,scroll:true,pageIndex:spec.pageIndex}
 }

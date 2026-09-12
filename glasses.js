@@ -1,6 +1,7 @@
 import { waitForEvenAppBridge, OsEventTypeList } from '@evenrealities/even_hub_sdk'
 import { quadrantPngBytes } from './score.js'
 import logoUrl from './wetscher-logo-g2.png?url'
+import { isEnglish, tr } from './i18n.js'
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms))
 const imageOk=r=>r===0||r===true||r==='success'
@@ -35,7 +36,7 @@ export class G2Viewer{
     if(this.bridge)return this.bridge
     let last
     for(let a=0;a<5;a++){try{this.bridge=await waitForEvenAppBridge();if(this.bridge)return this.bridge}catch(e){last=e}await sleep(180+120*a)}
-    throw last||new Error('Even G2 Bridge nicht erreichbar.')
+    throw last||new Error(tr('Even G2 Bridge nicht erreichbar.','Even G2 Bridge unavailable.'))
   }
   bindEvents(){
     if(!this.bridge)return
@@ -94,8 +95,8 @@ export class G2Viewer{
   async showStartupNotice(){
     const b=await this.ensureBridge();this.bindEvents()
     if(this.startupCreated)return
-    const res=await b.createStartUpPageContainer({containerTotalNum:1,textObject:[{xPosition:0,yPosition:0,width:576,height:288,borderWidth:0,borderColor:0,paddingLength:18,containerID:30,containerName:'startup',content:'SHEET MUSIC\n\nStarted successfully.\nLoading your library...',isEventCapture:1,zOrderIndex:1}]})
-    if(res!==0)throw new Error('Startanzeige konnte nicht erstellt werden: '+res)
+    const res=await b.createStartUpPageContainer({containerTotalNum:1,textObject:[{xPosition:0,yPosition:0,width:576,height:288,borderWidth:0,borderColor:0,paddingLength:18,containerID:30,containerName:'startup',content:isEnglish?'SHEET MUSIC\n\nStarted successfully.\nLoading your library...':'SHEET MUSIC\n\nErfolgreich gestartet.\nBibliothek wird geladen…',isEventCapture:1,zOrderIndex:1}]})
+    if(res!==0)throw new Error(tr('Startanzeige konnte nicht erstellt werden: ','Startup screen could not be created: ')+res)
     this.startupCreated=true;this.mode='startup'
   }
   async boot(){
@@ -111,7 +112,7 @@ export class G2Viewer{
       this.bridge=null;this.boundBridge=null;try{this.unsub?.()}catch{};this.unsub=null
       const b2=await this.ensureBridge(true);this.bindEvents();ok=await b2.rebuildPageContainer(payload)
     }
-    if(ok!==true)throw new Error(label+' konnte nicht erstellt werden.')
+    if(ok!==true)throw new Error(label+tr(' konnte nicht erstellt werden.',' could not be created.'))
   }
   async logoPngBytes(){
     if(this.logoBytes)return this.logoBytes
@@ -131,10 +132,10 @@ export class G2Viewer{
     if(this.libraryFolderId){
       const f=folders.find(x=>x.id===this.libraryFolderId)
       if(!f){this.libraryFolderId=null;return this.rebuildLibraryItems()}
-      this.libraryItems=[{kind:'back',id:'__back__',name:'‹ ZURÜCK'},...this.libraryScores.filter(s=>s.folderId===f.id).map(s=>({kind:'score',id:s.id,name:s.name||s.fileName||'Unbenannte Noten'}))]
+      this.libraryItems=[{kind:'back',id:'__back__',name:isEnglish?'‹ BACK':'‹ ZURÜCK'},...this.libraryScores.filter(s=>s.folderId===f.id).map(s=>({kind:'score',id:s.id,name:s.name||s.fileName||tr('Unbenannte Noten','Untitled score')}))]
     }else{
       const ids=new Set(folders.map(f=>f.id)),root=this.libraryScores.filter(s=>!s.folderId||!ids.has(s.folderId))
-      this.libraryItems=[...folders.map(f=>{const count=this.libraryScores.filter(s=>s.folderId===f.id).length;return {kind:'folder',id:f.id,name:`▸ ${f.name||'Ordner'}`,count}}),...root.map(s=>({kind:'score',id:s.id,name:s.name||s.fileName||'Unbenannte Noten'}))]
+      this.libraryItems=[...folders.map(f=>{const count=this.libraryScores.filter(s=>s.folderId===f.id).length;return {kind:'folder',id:f.id,name:`▸ ${f.name||tr('Ordner','Folder')}`,count}}),...root.map(s=>({kind:'score',id:s.id,name:s.name||s.fileName||tr('Unbenannte Noten','Untitled score')}))]
     }
     this.librarySelected=Math.max(0,Math.min(this.librarySelected,Math.max(0,this.libraryItems.length-1)))
     this.libraryPage=Math.floor(this.librarySelected/4)
@@ -143,16 +144,16 @@ export class G2Viewer{
   async reloadLibrary(){const snap=await this.getLibrary();this.libraryScores=Array.isArray(snap)?snap:(snap?.scores||[]);this.libraryFolders=snap?.folders||[];this.rebuildLibraryItems()}
   libraryPayload(){
     const chunkStart=this.libraryChunk*20,visible=this.libraryItems.slice(chunkStart,chunkStart+20)
-    const names=visible.length?visible.map(x=>fitName(x.name,46)):['Keine Noten vorhanden']
-    const folder=this.libraryFolderId?this.libraryFolders.find(f=>f.id===this.libraryFolderId)?.name:'Bibliothek'
+    const names=visible.length?visible.map(x=>fitName(x.name,46)):[tr('Keine Noten vorhanden','No sheet music')]
+    const folder=this.libraryFolderId?this.libraryFolders.find(f=>f.id===this.libraryFolderId)?.name:tr('Bibliothek','Library')
     return {containerTotalNum:3,textObject:[
-      {xPosition:22,yPosition:98,width:532,height:24,borderWidth:0,borderColor:0,paddingLength:0,containerID:22,containerName:'folder',content:'SHEET MUSIC · '+fitName(folder||'Bibliothek',38),isEventCapture:0,zOrderIndex:2}
+      {xPosition:22,yPosition:98,width:532,height:24,borderWidth:0,borderColor:0,paddingLength:0,containerID:22,containerName:'folder',content:'SHEET MUSIC · '+fitName(folder||tr('Bibliothek','Library'),38),isEventCapture:0,zOrderIndex:2}
     ],imageObject:[
       {xPosition:144,yPosition:0,width:288,height:96,containerID:21,containerName:'wetscher-logo',zOrderIndex:1}
     ],listObject:[{xPosition:22,yPosition:126,width:532,height:156,borderWidth:1,borderColor:5,borderRadius:5,paddingLength:4,containerID:23,containerName:'score-list',zOrderIndex:3,itemContainer:{itemCount:names.length,itemWidth:0,isItemSelectBorderEn:1,itemName:names},isEventCapture:1}]}
   }
   async renderLibrary(){
-    await this.rebuild(this.libraryPayload(),'Bibliothek');this.mode='library'
+    await this.rebuild(this.libraryPayload(),tr('Bibliothek','Library'));this.mode='library'
     this.librarySelected=this.libraryChunk*20
     this.libraryPage=Math.floor(this.librarySelected/4)
     try{
@@ -160,7 +161,7 @@ export class G2Viewer{
       const r=await b.updateImageRawData({containerID:21,containerName:'wetscher-logo',imageData:bytes})
       if(!imageOk(r))console.warn('Logo update:',r)
     }catch(e){console.warn('Wetscher logo could not be sent',e)}
-    this.onStatus('G2-Bibliothek bereit')
+    this.onStatus(tr('G2-Bibliothek bereit','G2 library ready'))
   }
   async showLibrary(reload=true){if(reload)await this.reloadLibrary();else this.rebuildLibraryItems();await this.renderLibrary()}
   async moveLibrarySelection(delta){
@@ -169,7 +170,7 @@ export class G2Viewer{
     const oldChunk=this.libraryChunk;this.librarySelected=next;this.libraryPage=Math.floor(next/4);this.libraryChunk=Math.floor(next/20)
     if(this.libraryChunk!==oldChunk)await this.renderLibrary()
   }
-  async setLibraryLoading(text='Lade Noten…'){try{const b=await this.ensureBridge();await b.textContainerUpgrade({containerID:22,containerName:'folder',content:text})}catch{}}
+  async setLibraryLoading(text=tr('Lade Noten…','Loading score…')){try{const b=await this.ensureBridge();await b.textContainerUpgrade({containerID:22,containerName:'folder',content:text})}catch{}}
   async leaveFolder(){
     this.libraryFolderId=null;this.librarySelected=0;this.libraryPage=0;this.libraryChunk=0;this.rebuildLibraryItems();await this.renderLibrary()
   }
@@ -177,17 +178,17 @@ export class G2Viewer{
     const item=this.libraryItems[this.librarySelected];if(!item)return
     if(item.kind==='back'){await this.leaveFolder();return}
     if(item.kind==='folder'){this.libraryFolderId=item.id;this.librarySelected=0;this.libraryPage=0;this.libraryChunk=0;this.rebuildLibraryItems();await this.renderLibrary();return}
-    if(item.kind==='score'&&item.id){await this.setLibraryLoading('LADE NOTEN …');this.onStatus('Lade Noten…');await this.onOpenSaved(item.id);await this.createScorePage();await this.requestRender(true);this.onPrefetch(this.getIndex())}
+    if(item.kind==='score'&&item.id){await this.setLibraryLoading(tr('LADE NOTEN …','LOADING SCORE …'));this.onStatus(tr('Lade Noten…','Loading score…'));await this.onOpenSaved(item.id);await this.createScorePage();await this.requestRender(true);this.onPrefetch(this.getIndex())}
   }
   scorePayload(){return {containerTotalNum:5,textObject:[{xPosition:0,yPosition:0,width:576,height:288,borderWidth:0,borderColor:0,paddingLength:0,containerID:1,containerName:'events',content:' ',isEventCapture:1,zOrderIndex:1}],imageObject:[{xPosition:0,yPosition:0,width:288,height:144,containerID:2,containerName:'q1',zOrderIndex:2},{xPosition:288,yPosition:0,width:288,height:144,containerID:3,containerName:'q2',zOrderIndex:3},{xPosition:0,yPosition:144,width:288,height:144,containerID:4,containerName:'q3',zOrderIndex:4},{xPosition:288,yPosition:144,width:288,height:144,containerID:5,containerName:'q4',zOrderIndex:5}]}}
-  async createScorePage(){if(this.mode==='score')return;await this.rebuild(this.scorePayload(),'Notenansicht');this.mode='score'}
-  async start(){this.onStatus('Verbinde mit Even G2…');await this.ensureBridge();this.bindEvents();await this.createScorePage();await this.requestRender(true);this.onPrefetch(this.getIndex())}
+  async createScorePage(){if(this.mode==='score')return;await this.rebuild(this.scorePayload(),tr('Notenansicht','Score view'));this.mode='score'}
+  async start(){this.onStatus(tr('Verbinde mit Even G2…','Connecting to Even G2…'));await this.ensureBridge();this.bindEvents();await this.createScorePage();await this.requestRender(true);this.onPrefetch(this.getIndex())}
   async showPreparedView(view){if(!view?.canvas)return;while(this.busy)await sleep(10);this.busy=true;try{await this.createScorePage();await this.sendViewReliable(view)}finally{this.busy=false}}
   async refreshLibraryIfOpen(){await this.reloadLibrary();if(this.mode==='library')await this.renderLibrary()}
   async requestRender(immediate=false){this.pending=true;if(this.busy&&!immediate)return;await this.flush()}
-  async flush(){if(this.busy)return;this.busy=true;try{while(this.pending){this.pending=false;const v=this.getView();if(!v?.canvas)continue;await this.createScorePage();await this.sendViewReliable(v)}if(this.mode==='score')this.onStatus('G2 aktualisiert.')}finally{this.busy=false}}
+  async flush(){if(this.busy)return;this.busy=true;try{while(this.pending){this.pending=false;const v=this.getView();if(!v?.canvas)continue;await this.createScorePage();await this.sendViewReliable(v)}if(this.mode==='score')this.onStatus(tr('G2 aktualisiert.','G2 updated.'))}finally{this.busy=false}}
   async reconnect(){
-    if(this.reconnecting)return;this.reconnecting=true;this.onStatus('G2-Verbindung wird wiederhergestellt…')
+    if(this.reconnecting)return;this.reconnecting=true;this.onStatus(tr('G2-Verbindung wird wiederhergestellt…','Restoring G2 connection…'))
     try{try{this.unsub?.()}catch{};this.unsub=null;this.boundBridge=null;this.bridge=null;await this.ensureBridge(true);this.bindEvents();/* startupCreated intentionally stays true: startup is one-shot */}
     finally{this.reconnecting=false}
   }
@@ -195,6 +196,6 @@ export class G2Viewer{
   async sendCanvasReliable(canvas,prepared=null){try{return await this.sendCanvas(canvas,prepared)}catch(first){console.warn('G2 send failed; retrying bridge once',first);await this.reconnect();return await this.sendCanvas(canvas,prepared)}}
   async sendCanvas(canvas,prepared=null){
     const b=await this.ensureBridge();this.bindEvents();const parts=[[2,'q1',0,0],[3,'q2',288,0],[4,'q3',0,144],[5,'q4',288,144]],bytes=prepared||await Promise.all(parts.map(([,n,x,y])=>quadrantPngBytes(canvas,x,y)))
-    for(let i=0;i<4;i++){const [id,name]=parts[i],r=await b.updateImageRawData({containerID:id,containerName:name,imageData:bytes[i]});if(!imageOk(r))throw new Error(`Bild-Update ${name}: ${r}`)}
+    for(let i=0;i<4;i++){const [id,name]=parts[i],r=await b.updateImageRawData({containerID:id,containerName:name,imageData:bytes[i]});if(!imageOk(r))throw new Error(`${tr('Bild-Update','Image update')} ${name}: ${r}`)}
   }
 }

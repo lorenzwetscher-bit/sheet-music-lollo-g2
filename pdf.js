@@ -1,3 +1,4 @@
+import { tr } from './i18n.js'
 import * as pdfjsLib from 'pdfjs-dist'
 import PdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker&inline'
 import { heicTo } from 'heic-to/csp'
@@ -54,7 +55,7 @@ export async function pdfToCanvases(file){
     return pages
   }catch(err){
     console.error('PDF import failed',err)
-    throw new Error('PDF konnte nicht gelesen werden: '+(err?.message||String(err)))
+    throw new Error(tr('PDF konnte nicht gelesen werden: ','PDF could not be read: ')+(err?.message||String(err)))
   }
 }
 
@@ -96,7 +97,7 @@ async function decodeBlobWithImg(blob){
     const img=await loadHtmlImage(url)
     const w=img.naturalWidth||img.width
     const h=img.naturalHeight||img.height
-    if(!w||!h)throw new Error('Bild hat keine gültige Größe.')
+    if(!w||!h)throw new Error(tr('Bild hat keine gültige Größe.','Image has no valid dimensions.'))
     return {source:img,width:w,height:h}
   } finally {
     // Keep URL alive until the image was decoded; after onload the pixels are available.
@@ -111,13 +112,13 @@ async function heicToDecodableBlob(file){
 
 async function tiffToCanvas(buffer){
   const ifds=UTIF.decode(buffer)
-  if(!ifds?.length)throw new Error('TIFF enthält kein lesbares Bild.')
+  if(!ifds?.length)throw new Error(tr('TIFF enthält kein lesbares Bild.','TIFF contains no readable image.'))
   const ifd=ifds[0]
   UTIF.decodeImage(buffer,ifd)
   const rgba=UTIF.toRGBA8(ifd)
   const w=ifd.width||ifd.t256?.[0]
   const h=ifd.height||ifd.t257?.[0]
-  if(!w||!h)throw new Error('TIFF hat keine gültige Größe.')
+  if(!w||!h)throw new Error(tr('TIFF hat keine gültige Größe.','TIFF has no valid dimensions.'))
   const c=document.createElement('canvas')
   c.width=w;c.height=h
   const ctx=c.getContext('2d')
@@ -143,7 +144,7 @@ export async function imageToCanvas(file){
   // recognition pipeline sees it. This removes format/container differences
   // from the rest of the app and makes later G2 rendering deterministic.
   try{
-    if(!file)throw new Error('Keine Bilddatei ausgewählt.')
+    if(!file)throw new Error(tr('Keine Bilddatei ausgewählt.','No image file selected.'))
     const buffer=await file.arrayBuffer()
     const head=new Uint8Array(buffer.slice(0,32))
 
@@ -184,6 +185,6 @@ export async function imageToCanvas(file){
     }
   }catch(err){
     console.error('Image import failed',err)
-    throw new Error('Foto konnte nicht automatisch umgewandelt werden. Unterstützt werden Handyfotos wie JPG/JPEG/JFIF, PNG, HEIC/HEIF, WebP, GIF, BMP, TIFF und – je nach Android-WebView – AVIF.')
+    throw new Error(tr('Foto konnte nicht automatisch umgewandelt werden. Unterstützt werden Handyfotos wie JPG/JPEG/JFIF, PNG, HEIC/HEIF, WebP, GIF, BMP, TIFF und – je nach Android-WebView – AVIF.','Photo could not be converted automatically. Supported phone image formats include JPG/JPEG/JFIF, PNG, HEIC/HEIF, WebP, GIF, BMP, TIFF and – depending on the Android WebView – AVIF.'))
   }
 }
