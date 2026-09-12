@@ -1,6 +1,7 @@
-export const isEnglish = /^en(?:-|$)/i.test(navigator.language || '')
-export const lang = isEnglish ? 'en' : 'de'
-export const tr = (de,en) => isEnglish ? en : de
+export const isGerman = /^de(?:-|$)/i.test(navigator.language || '')
+export const isEnglish = !isGerman
+export const lang = isGerman ? 'de' : 'en'
+export const tr = (de,en) => isGerman ? de : en
 
 const exact = new Map([
 ['Sheet Music for Even G2','Sheet Music for Even G2'],

@@ -2,7 +2,7 @@
   "package_id": "com.vailble.sheetmusic",
   "edition": "202601",
   "name": "Sheet Music",
-  "version": "2.0.5",
+  "version": "2.0.6",
   "min_sdk_version": "0.0.14",
   "entrypoint": "index.html",
   "permissions": [
