@@ -178,3 +178,26 @@ export async function deleteFolder(id){
 export async function listFolders(){await ensurePersistenceReady();return rawListFolders()}
 export async function fileToStored(file){return {name:file.name,type:file.type,lastModified:file.lastModified||0,bytes:await file.arrayBuffer()}}
 export function storedToFile(stored){if(!stored)return null;try{return new File([stored.bytes],stored.name||'score',{type:stored.type||'',lastModified:stored.lastModified||Date.now()})}catch{return new Blob([stored.bytes],{type:stored.type||''})}}
+
+// Order preferences are persisted through the same Even storage as the library.
+const ORDER_KEY='sheetmusic.order.v1'
+let orderPreferences=null
+export async function getSongOrder(){
+  await ensurePersistenceReady()
+  if(!orderPreferences){try{orderPreferences=JSON.parse(await nativeGet(ORDER_KEY))}catch{}}
+  return orderPreferences||{mode:'recent',ids:[]}
+}
+export async function setSongOrder(mode,ids){
+  const value={mode,ids:[...ids]}
+  if(!await nativeSet(ORDER_KEY,JSON.stringify(value)))throw new Error(tr('Reihenfolge konnte nicht gespeichert werden.','Could not save song order.'))
+  orderPreferences=value
+}
+export function orderSongs(rows,preferences){
+  const result=[...rows]
+  if(preferences.mode==='alphabetical')return result.sort((a,b)=>String(a.name||a.fileName||'').localeCompare(String(b.name||b.fileName||''),undefined,{numeric:true,sensitivity:'base'})||String(a.id).localeCompare(String(b.id)))
+  if(preferences.mode==='custom'){
+    const positions=new Map(preferences.ids.map((id,i)=>[id,i]))
+    return result.sort((a,b)=>(positions.get(a.id)??Infinity)-(positions.get(b.id)??Infinity))
+  }
+  return result
+}

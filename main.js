@@ -1,7 +1,7 @@
 import './style.css'
 import { pdfToCanvases, imageToCanvas, isPdfFile } from './pdf.js'
 import { extractCutDescriptors, buildViews, processView, processScrollFrame, processPrompterWindow } from './score.js'
-import { saveScore, listScores, getScore, deleteScore, fileToStored, storedToFile, listFolders, createFolder, renameFolder, deleteFolder, moveScoreToFolder } from './library.js'
+import { saveScore, listScores, getScore, deleteScore, fileToStored, storedToFile, listFolders, createFolder, renameFolder, deleteFolder, moveScoreToFolder, getSongOrder, setSongOrder, orderSongs } from './library.js'
 import { G2Viewer } from './glasses.js'
 import { waitForEvenAppBridge } from '@evenrealities/even_hub_sdk'
 import { isEnglish, tr, translateStaticUI } from './i18n.js'
@@ -14,9 +14,10 @@ document.querySelector('#app').innerHTML=`
   <h1>Sheet Music for Even G2</h1>
   <p>Noten automatisch erkennen, 1–8 Zeilen als einen durchgehenden Ausschnitt auf der G2 anzeigen und schnell durch die Ansichten wechseln.</p>
   <div class="card">
-    <div class="grid3"><button id="cameraBtn" class="filebtn" type="button">📷 Foto</button><button id="albumBtn" class="filebtn" type="button">🖼️ Galerie</button><label class="filebtn">📄 PDF<input id="pdfInput" type="file" accept="application/pdf"></label></div>
+    <div class="grid3"><button id="cameraBtn" class="filebtn" type="button">📷 Foto</button><button id="albumBtn" class="filebtn" type="button">🖼️ Galerie</button><label class="filebtn">📄 PDF<input id="pdfInput" type="file" accept="application/pdf" multiple></label></div>
     <input id="imgFallback" class="hiddenFileInput" type="file" accept="image/*,.heic,.heif,.jfif,.webp,.gif,.bmp,.tif,.tiff,.avif">
     <input id="cameraFallback" class="hiddenFileInput" type="file" accept="image/*" capture="environment">
+    <label class="filebtn">${tr('Mehrere PDFs / Bilder importieren','Import multiple PDFs / images')}<input id="batchInput" type="file" accept="application/pdf,image/*,.heic,.heif,.tif,.tiff" multiple></label>
     <input id="scoreName" type="text" placeholder="Name der Noten">
     <button id="detect" class="primary" disabled>Notenzeilen erkennen</button>
     <div class="setting"><div class="settingrow"><span>Sichtbare Notenzeilen</span><strong id="rowsLabel">4</strong></div><div class="segmented eight"><button data-rows="1">1</button><button data-rows="2">2</button><button data-rows="3">3</button><button data-rows="4" class="active">4</button><button data-rows="5">5</button><button data-rows="6">6</button><button data-rows="7">7</button><button data-rows="8">8</button></div></div>
@@ -51,7 +52,7 @@ document.querySelector('#app').innerHTML=`
     <div class="row"><button id="prev">← Zurück</button><button id="next">Weiter →</button></div>
   </div>
 
-  <div class="card"><div class="settingrow"><strong>Gespeicherte Noten</strong><span class="badge" id="libCount">0</span></div><div class="folderCreate"><input id="folderName" type="text" placeholder="Neuen Ordner erstellen"><button id="createFolder" type="button">Ordner erstellen</button></div><div id="library"><p class="small">Noch nichts gespeichert.</p></div></div>
+  <div class="card"><div class="settingrow"><strong>Gespeicherte Noten</strong><span class="badge" id="libCount">0</span></div><div class="folderCreate"><input id="folderName" type="text" placeholder="Neuen Ordner erstellen"><button id="createFolder" type="button">Ordner erstellen</button></div><div class="row"><select id="songOrder" aria-label="${tr('Song-Reihenfolge','Song order')}"><option value="recent">${tr('Zuletzt geändert','Recently updated')}</option><option value="alphabetical">${tr('Alphabetisch','Alphabetical')}</option><option value="custom">${tr('Eigene Reihenfolge','Custom order')}</option></select><button id="nextSong" type="button" disabled>${tr('Nächster Song →','Next song →')}</button></div><div id="library"><p class="small">Noch nichts gespeichert.</p></div></div>
 </div>`
 translateStaticUI(document)
 
@@ -65,7 +66,7 @@ const prompterCache=new Map(),prompterInflight=new Map();let prompterPrefetchTok
 
 const defaultAdj=()=>({cropX:0,cropY:0,cropHeight:100,cropWidth:100})
 const defaultName=f=>(f?.name||'').replace(/\.[^.]+$/,'')
-function choose(f){file=f;currentId=null;fingerScrollProgress=0;fingerScrollPage=-1;$('#detect').disabled=!f;$('#save').disabled=true;$('#startG2').disabled=true;if(f&&!$('#scoreName').value.trim())$('#scoreName').value=defaultName(f);$('#status').textContent=f?isEnglish?`${f.name} selected.`:`${f.name} ausgewählt.`:tr('Noch keine Datei ausgewählt.','No file selected yet.')}
+function choose(f){if(importing||songOpening)return;stopAutoScroll();file=f;currentId=null;fingerScrollProgress=0;fingerScrollPage=-1;$('#detect').disabled=!f;$('#save').disabled=true;$('#startG2').disabled=true;if(f)$('#scoreName').value=defaultName(f);$('#status').textContent=f?isEnglish?`${f.name} selected.`:`${f.name} ausgewählt.`:tr('Noch keine Datei ausgewählt.','No file selected yet.')}
 
 function scrollDurationSeconds(){
   const m=Math.max(0,Math.min(60,Number($('#scrollMinutes')?.value)||0)),s=Math.max(0,Math.min(59,Number($('#scrollSeconds')?.value)||0))
@@ -219,7 +220,8 @@ $('#cameraBtn').onclick=()=>pickEvenImage('camera')
 $('#albumBtn').onclick=()=>pickEvenImage('album')
 $('#imgFallback').onchange=()=>{choose($('#imgFallback').files?.[0]||null);$('#pdfInput').value=''}
 $('#cameraFallback').onchange=()=>{choose($('#cameraFallback').files?.[0]||null);$('#pdfInput').value=''}
-$('#pdfInput').onchange=()=>{choose($('#pdfInput').files?.[0]||null);$('#imgFallback').value='';$('#cameraFallback').value=''}
+$('#pdfInput').onchange=async()=>{const files=[...($('#pdfInput').files||[])];if(files.length>1)await importFiles(files);else choose(files[0]||null);$('#pdfInput').value='';$('#imgFallback').value='';$('#cameraFallback').value=''}
+$('#batchInput').onchange=async()=>{await importFiles([...($('#batchInput').files||[])]);$('#batchInput').value=''}
 $('#scrollMinutes').oninput=updateScrollCalc
 $('#scrollSeconds').oninput=updateScrollCalc
 $('#autoScrollBtn').onclick=startAutoScroll
@@ -326,13 +328,13 @@ async function loadSelectedFile(f){
 }
 
 
-async function processFile(f){$('#detect').disabled=true;$('#save').disabled=true;$('#startG2').disabled=true;$('#result').style.display='none';$('#status').textContent=tr('Lese Datei…','Reading file…');try{pages=await loadSelectedFile(f);totalPages=pages.length;fingerScrollProgress=0;fingerScrollPage=-1;descriptors=[];for(let i=0;i<pages.length;i++){ $('#status').textContent=isEnglish?`Detecting music on page ${i+1}/${pages.length}…`:`Erkenne Noten auf Seite ${i+1}/${pages.length}…`;descriptors.push(...extractCutDescriptors(pages[i],i)) } rebuildViews(true);if(!views.length)throw new Error(tr('Keine Notenzeilen gefunden.','No music lines found.'));$('#result').style.display='block';$('#save').disabled=false;$('#startG2').disabled=false;updateScrollCalc();syncScrollOptions();await renderCurrent({pushG2:false});$('#status').textContent=isEnglish?`Ready – ${views.length} views from ${descriptors.length} detected lines.`:`Fertig – ${views.length} Ansichten aus ${descriptors.length} erkannten Zeilen.`}catch(e){console.error(e);$('#status').textContent=tr('Fehler: ','Error: ')+(e?.message||e)}finally{$('#detect').disabled=!file}}
+async function processFile(f){if(importing||songOpening)return;$('#detect').disabled=true;$('#save').disabled=true;$('#startG2').disabled=true;$('#result').style.display='none';$('#status').textContent=tr('Lese Datei…','Reading file…');try{pages=await loadSelectedFile(f);totalPages=pages.length;fingerScrollProgress=0;fingerScrollPage=-1;descriptors=[];for(let i=0;i<pages.length;i++){ $('#status').textContent=isEnglish?`Detecting music on page ${i+1}/${pages.length}…`:`Erkenne Noten auf Seite ${i+1}/${pages.length}…`;descriptors.push(...extractCutDescriptors(pages[i],i)) } rebuildViews(true);if(!views.length)throw new Error(tr('Keine Notenzeilen gefunden.','No music lines found.'));$('#result').style.display='block';$('#save').disabled=false;$('#startG2').disabled=false;updateScrollCalc();syncScrollOptions();await renderCurrent({pushG2:false});$('#status').textContent=isEnglish?`Ready – ${views.length} views from ${descriptors.length} detected lines.`:`Fertig – ${views.length} Ansichten aus ${descriptors.length} erkannten Zeilen.`}catch(e){console.error(e);$('#status').textContent=tr('Fehler: ','Error: ')+(e?.message||e)}finally{$('#detect').disabled=!file}}
 $('#detect').onclick=()=>file&&processFile(file)
 
 function makeId(){return globalThis.crypto?.randomUUID?.()||`score-${Date.now()}-${Math.random().toString(36).slice(2)}`}
-$('#save').onclick=async()=>{if(!file||!descriptors.length)return;$('#save').disabled=true;$('#status').textContent=tr('Speichere…','Saving…');try{const name=$('#scoreName').value.trim()||defaultName(file)||tr('Unbenannte Noten','Untitled score'),id=currentId||makeId(),prev=currentId?await getScore(currentId):null;const storedFile=await fileToStored(file);await saveScore({id,name,fileName:file.name,type:file.type,storedFile,createdAt:prev?.createdAt||Date.now(),updatedAt:Date.now(),settings:{...settings(),linesPerView,autoScrollSeconds:scrollDurationSeconds(),scrollEnabled:$('#scrollEnabled').checked,scrollMode:document.querySelector('input[name="scrollMode"]:checked')?.value||'time'},adjustments,descriptorBounds:descriptors.map(d=>({pageIndex:d.pageIndex,lineIndex:d.lineIndex,bounds:{...d.bounds}})),folderId:$('#saveFolder').value||null});currentId=id;$('#status').textContent=isEnglish?`“${name}” saved.`:`„${name}“ gespeichert.`;await refreshLibrary();await viewer?.refreshLibraryIfOpen()}catch(e){console.error(e);$('#status').textContent=tr('Speichern fehlgeschlagen: ','Save failed: ')+(e?.name==='QuotaExceededError'?tr('Speicherplatz der Even App ist voll. Bitte alte Noten löschen.','Even App storage is full. Delete old scores.'):(e?.message||e))}finally{$('#save').disabled=false}}
+$('#save').onclick=async()=>{if(importing||songOpening||!file||!descriptors.length)return;$('#save').disabled=true;$('#status').textContent=tr('Speichere…','Saving…');try{const name=$('#scoreName').value.trim()||defaultName(file)||tr('Unbenannte Noten','Untitled score'),id=currentId||makeId(),prev=currentId?await getScore(currentId):null;const storedFile=await fileToStored(file);await saveScore({id,name,fileName:file.name,type:file.type,storedFile,createdAt:prev?.createdAt||Date.now(),updatedAt:Date.now(),settings:{...settings(),linesPerView,autoScrollSeconds:scrollDurationSeconds(),scrollEnabled:$('#scrollEnabled').checked,scrollMode:document.querySelector('input[name="scrollMode"]:checked')?.value||'time'},adjustments,descriptorBounds:descriptors.map(d=>({pageIndex:d.pageIndex,lineIndex:d.lineIndex,bounds:{...d.bounds}})),folderId:$('#saveFolder').value||null});currentId=id;$('#status').textContent=isEnglish?`“${name}” saved.`:`„${name}“ gespeichert.`;await refreshLibrary();await viewer?.refreshLibraryIfOpen()}catch(e){console.error(e);$('#status').textContent=tr('Speichern fehlgeschlagen: ','Save failed: ')+(e?.name==='QuotaExceededError'?tr('Speicherplatz der Even App ist voll. Bitte alte Noten löschen.','Even App storage is full. Delete old scores.'):(e?.message||e))}finally{$('#save').disabled=false}}
 
-async function openSaved(id){const r=await getScore(id);if(!r)return;$('#status').textContent=tr('Öffne gespeicherte Noten…','Opening saved sheet music…');currentId=r.id;file=r.storedFile?storedToFile(r.storedFile):r.blob;if(!file)throw new Error(tr('Gespeicherte Datei fehlt.','Saved file is missing.'));$('#scoreName').value=r.name;$('#contrast').value=r.settings?.contrast??150;$('#contrastValue').textContent=$('#contrast').value;$('#invert').checked=!!r.settings?.invert;$('#cutout').checked=r.settings?.cutout!==false;linesPerView=Math.max(1,Math.min(8,r.settings?.linesPerView||r.settings?.rowsPerView||4));document.querySelectorAll('[data-rows]').forEach(x=>x.classList.toggle('active',+x.dataset.rows===linesPerView));$('#rowsLabel').textContent=linesPerView;const autoSec=Math.max(10,Number(r.settings?.autoScrollSeconds)||180);$('#scrollMinutes').value=Math.floor(autoSec/60);$('#scrollSeconds').value=autoSec%60;$('#scrollEnabled').checked=!!r.settings?.scrollEnabled;const sm=r.settings?.scrollMode==='finger'?'finger':'time';const radio=document.querySelector(`input[name="scrollMode"][value="${sm}"]`);if(radio)radio.checked=true;fingerScrollProgress=0;fingerScrollPage=-1;await refreshFolderOptions(r.folderId||'');pages=await loadSelectedFile(file);totalPages=pages.length;descriptors=[];const savedBounds=Array.isArray(r.descriptorBounds)?r.descriptorBounds:null;if(savedBounds?.length){for(const d of savedBounds){const source=pages[d.pageIndex];if(source&&d.bounds)descriptors.push({source,pageIndex:d.pageIndex||0,lineIndex:d.lineIndex||0,bounds:{...d.bounds}})}}if(!descriptors.length){for(let i=0;i<pages.length;i++)descriptors.push(...extractCutDescriptors(pages[i],i))}rebuildViews(true);adjustments=Array.isArray(r.adjustments)?r.adjustments.map(a=>({...defaultAdj(),...a})):[];ensureAdjustments();idx=0;$('#result').style.display='block';$('#save').disabled=false;$('#startG2').disabled=false;updateScrollCalc();syncScrollOptions();await renderCurrent({pushG2:false});$('#status').textContent=isEnglish?`“${r.name}” opened.`:`„${r.name}“ geöffnet.`}
+async function openSaved(id){stopAutoScroll();const r=await getScore(id);if(!r)return;$('#status').textContent=tr('Öffne gespeicherte Noten…','Opening saved sheet music…');currentId=r.id;file=r.storedFile?storedToFile(r.storedFile):r.blob;if(!file)throw new Error(tr('Gespeicherte Datei fehlt.','Saved file is missing.'));$('#scoreName').value=r.name;$('#contrast').value=r.settings?.contrast??150;$('#contrastValue').textContent=$('#contrast').value;$('#invert').checked=!!r.settings?.invert;$('#cutout').checked=r.settings?.cutout!==false;linesPerView=Math.max(1,Math.min(8,r.settings?.linesPerView||r.settings?.rowsPerView||4));document.querySelectorAll('[data-rows]').forEach(x=>x.classList.toggle('active',+x.dataset.rows===linesPerView));$('#rowsLabel').textContent=linesPerView;const autoSec=Math.max(10,Number(r.settings?.autoScrollSeconds)||180);$('#scrollMinutes').value=Math.floor(autoSec/60);$('#scrollSeconds').value=autoSec%60;$('#scrollEnabled').checked=!!r.settings?.scrollEnabled;const sm=r.settings?.scrollMode==='finger'?'finger':'time';const radio=document.querySelector(`input[name="scrollMode"][value="${sm}"]`);if(radio)radio.checked=true;fingerScrollProgress=0;fingerScrollPage=-1;await refreshFolderOptions(r.folderId||'');pages=await loadSelectedFile(file);totalPages=pages.length;descriptors=[];const savedBounds=Array.isArray(r.descriptorBounds)?r.descriptorBounds:null;if(savedBounds?.length){for(const d of savedBounds){const source=pages[d.pageIndex];if(source&&d.bounds)descriptors.push({source,pageIndex:d.pageIndex||0,lineIndex:d.lineIndex||0,bounds:{...d.bounds}})}}if(!descriptors.length){for(let i=0;i<pages.length;i++)descriptors.push(...extractCutDescriptors(pages[i],i))}rebuildViews(true);adjustments=Array.isArray(r.adjustments)?r.adjustments.map(a=>({...defaultAdj(),...a})):[];ensureAdjustments();idx=0;$('#result').style.display='block';$('#save').disabled=false;$('#startG2').disabled=false;updateScrollCalc();syncScrollOptions();await renderCurrent({pushG2:false});await updateNextSong();$('#status').textContent=isEnglish?`“${r.name}” opened.`:`„${r.name}“ geöffnet.`}
 async function removeSaved(id){await deleteScore(id);if(currentId===id)currentId=null;await refreshLibrary();await viewer?.refreshLibraryIfOpen()}
 async function refreshFolderOptions(selected=''){
   const folders=await listFolders(),sel=$('#saveFolder');sel.innerHTML=`<option value="">${tr('Kein Ordner','No folder')}</option>`
@@ -341,7 +343,7 @@ async function refreshFolderOptions(selected=''){
   return folders
 }
 async function refreshLibrary(){
-  const [rows,folders]=await Promise.all([listScores(),refreshFolderOptions($('#saveFolder')?.value||'')]);$('#libCount').textContent=rows.length
+  const [rawRows,folders,preferences]=await Promise.all([listScores(),refreshFolderOptions($('#saveFolder')?.value||''),getSongOrder()]);const rows=orderSongs(rawRows,preferences);$('#songOrder').value=preferences.mode;$('#libCount').textContent=rows.length;await updateNextSong(rows)
   const el=$('#library');el.innerHTML=''
   if(!folders.length&&!rows.length){el.innerHTML=`<p class="small">${tr('Noch nichts gespeichert.','Nothing saved yet.')}</p>`;return}
   for(const f of folders){
@@ -359,7 +361,16 @@ async function refreshLibrary(){
 function makeLibraryRow(r,folders){
   const div=document.createElement('div');div.className='libraryItem';const d=new Date(r.updatedAt||r.createdAt)
   div.innerHTML=`<div><div class="libname">${escapeHtml(r.name)}</div><div class="libmeta">${escapeHtml(r.fileName||'')} · ${d.toLocaleDateString(isEnglish?'en':'de')}</div></div><select class="move"><option value="">${tr('Kein Ordner','No folder')}</option>${folders.map(f=>`<option value="${escapeHtml(f.id)}" ${r.folderId===f.id?'selected':''}>${escapeHtml(f.name)}</option>`).join('')}</select><button class="open">${tr('Öffnen','Open')}</button><button class="danger delete">${tr('Löschen','Delete')}</button>`
-  div.querySelector('.open').onclick=()=>openSaved(r.id).catch(e=>$('#status').textContent=tr('Öffnen fehlgeschlagen: ','Open failed: ')+(e?.message||e))
+  div.querySelector('.open').onclick=()=>openOnGlasses(r.id)
+  if($('#songOrder').value==='custom'){
+    const controls=document.createElement('div');controls.className='row';controls.style.gridColumn='1 / -1';controls.style.marginTop='0'
+    for(const [label,delta] of [['↑',-1],['↓',1]]){
+      const button=document.createElement('button');button.type='button';button.textContent=label;button.setAttribute('aria-label',tr('Song verschieben','Move song')+' '+label)
+      button.onclick=async()=>{button.disabled=true;try{await moveSong(r.id,delta)}catch(e){$('#status').textContent=e?.message||e}finally{button.disabled=false}}
+      controls.appendChild(button)
+    }
+    div.appendChild(controls)
+  }
   div.querySelector('.delete').onclick=()=>removeSaved(r.id)
   div.querySelector('.move').onchange=async e=>{await moveScoreToFolder(r.id,e.target.value||null);$('#status').textContent=tr('Noten verschoben.','Sheet music moved.');await refreshLibrary();await viewer?.refreshLibraryIfOpen()}
   return div
@@ -399,7 +410,7 @@ function ensureViewer(){
     },
     getViewCount:()=>views.length,
     onStatus:msg=>$('#status').textContent=msg,
-    getLibrary:async()=>{const [scores,folders]=await Promise.all([listScores(),listFolders()]);return {scores,folders}},
+    getLibrary:async()=>{const [rows,folders,preferences]=await Promise.all([listScores(),listFolders(),getSongOrder()]);return {scores:orderSongs(rows,preferences),folders}},
     onOpenSaved:async id=>{await openSaved(id);return viewResults[idx]||cache.get(keyFor(idx))},
     onPrefetch:center=>queuePrefetch(center),
     onScoreExit:()=>stopAutoScroll(tr('Zurück in der Bibliothek.','Back in library.')),
@@ -411,3 +422,57 @@ function ensureViewer(){
 $('#startG2').onclick=async()=>{if(!views.length)return;try{await ensureViewer().start();$('#status').textContent=tr('G2 verbunden – Wischen und Änderungen aktualisieren die Brille automatisch.','G2 connected – swipes and changes update the glasses automatically.')}catch(e){console.error(e);$('#status').textContent=tr('G2-Verbindung fehlgeschlagen: ','G2 connection failed: ')+(e?.message||e)}}
 updateScrollCalc();syncScrollOptions()
 refreshLibrary().then(()=>ensureViewer().boot()).catch(e=>{console.error(e);$('#status').textContent=tr('G2-Start fehlgeschlagen: ','G2 startup failed: ')+(e?.message||e)})
+
+let songOpening=false,importing=false
+async function sortedSongs(){return orderSongs(await listScores(),await getSongOrder())}
+function songSequence(rows){
+  const current=rows.find(r=>r.id===currentId)
+  return current?rows.filter(r=>(r.folderId||null)===(current.folderId||null)):[]
+}
+async function updateNextSong(rows=null){
+  const sequence=songSequence(rows||await sortedSongs()),position=sequence.findIndex(r=>r.id===currentId)
+  $('#nextSong').disabled=songOpening||importing||position<0||position>=sequence.length-1
+}
+async function openOnGlasses(id){
+  if(songOpening||importing)return
+  songOpening=true;$('#nextSong').disabled=true
+  try{await openSaved(id);await ensureViewer().start()}
+  catch(e){$('#status').textContent=tr('Öffnen fehlgeschlagen: ','Open failed: ')+(e?.message||e)}
+  finally{songOpening=false;await updateNextSong()}
+}
+$('#nextSong').onclick=async()=>{
+  const sequence=songSequence(await sortedSongs()),position=sequence.findIndex(r=>r.id===currentId)
+  if(position>=0&&position<sequence.length-1)await openOnGlasses(sequence[position+1].id)
+}
+$('#songOrder').onchange=async()=>{
+  const mode=$('#songOrder').value
+  try{const rows=await sortedSongs(),previous=await getSongOrder();await setSongOrder(mode,mode==='custom'&&!previous.ids.length?rows.map(r=>r.id):previous.ids);await refreshLibrary();await viewer?.refreshLibraryIfOpen()}
+  catch(e){$('#status').textContent=e?.message||e;await refreshLibrary()}
+}
+async function moveSong(id,delta){
+  const rows=await sortedSongs(),current=rows.find(r=>r.id===id)
+  if(!current)return
+  const group=rows.filter(r=>(r.folderId||null)===(current.folderId||null)),index=group.findIndex(r=>r.id===id),target=group[index+delta]
+  if(!target)return
+  const ids=rows.map(r=>r.id),a=ids.indexOf(id),b=ids.indexOf(target.id)
+  ;[ids[a],ids[b]]=[ids[b],ids[a]]
+  await setSongOrder('custom',ids);await refreshLibrary();await viewer?.refreshLibraryIfOpen()
+}
+async function importFiles(files){
+  if(!files.length||importing||songOpening)return
+  importing=true;$('#nextSong').disabled=true;$('#save').disabled=true;$('#detect').disabled=true
+  const failed=[];let saved=0
+  try{
+    const folderId=$('#saveFolder').value||null,importSettings={...settings(),linesPerView,autoScrollSeconds:scrollDurationSeconds(),scrollEnabled:$('#scrollEnabled').checked,scrollMode:document.querySelector('input[name="scrollMode"]:checked')?.value||'time'}
+    for(let i=0;i<files.length;i++){
+      const f=files[i]
+      $('#status').textContent=tr('Importiere ','Importing ')+`${i+1}/${files.length}: ${f.name}`
+      try{
+        await saveScore({id:makeId(),name:defaultName(f),fileName:f.name,type:f.type,storedFile:await fileToStored(f),createdAt:Date.now(),updatedAt:Date.now(),folderId,settings:importSettings,adjustments:[],descriptorBounds:[]})
+        saved++
+      }catch(e){failed.push(f.name+': '+(e?.message||e))}
+    }
+    await refreshLibrary();await viewer?.refreshLibraryIfOpen()
+    $('#status').textContent=tr('Importiert: ','Imported: ')+`${saved}/${files.length}`+(failed.length?' · '+tr('Fehlgeschlagen: ','Failed: ')+failed.join('; '):'')
+  }finally{importing=false;$('#save').disabled=!file||!descriptors.length;$('#detect').disabled=!file;await updateNextSong()}
+}
